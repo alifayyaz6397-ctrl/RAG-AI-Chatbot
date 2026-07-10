@@ -1,0 +1,27 @@
+import sys
+from pdf_parser import extract_text_from_pdf
+from chunking import chunk_text
+from embedding import embed_text
+from storage import store_chunk
+
+def ingest_document(pdf_path: str):
+    print(f"Extracting text from {pdf_path}...")
+    text = extract_text_from_pdf(pdf_path)
+    print(f"Extracted {len(text)} characters")
+
+    print("Chunking...")
+    chunks = chunk_text(text)
+    print(f"Created {len(chunks)} chunks")
+
+    for i, chunk in enumerate(chunks):
+        print(f"Embedding + storing chunk {i+1}/{len(chunks)}...")
+        vector = embed_text(chunk)
+        store_chunk(pdf_path, i, chunk, vector)
+
+    print("Done.")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python ingest.py <path_to_pdf>")
+        sys.exit(1)
+    ingest_document(sys.argv[1])
