@@ -4,6 +4,7 @@ import "./App.css";
 function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
+  const [regNumber, setRegNumber] = useState("");
 
   async function sendMessage() {
     console.log("========== SEND BUTTON CLICKED ==========");
@@ -44,6 +45,7 @@ function App() {
           },
           body: JSON.stringify({
             question: question,
+            registration_number: regNumber.trim() || null,
           }),
         }
       );
@@ -115,6 +117,13 @@ function App() {
       <div className="input-area">
         <input
           type="text"
+          value={regNumber}
+          onChange={(e) => setRegNumber(e.target.value)}
+          placeholder="Registration number (optional)"
+        />
+
+        <input
+          type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Message Exam AI..."
@@ -125,8 +134,8 @@ function App() {
           }}
         />
 
-        <button onClick={sendMessage}>➤</button>
-      </div>
+      <button onClick={sendMessage}>➤</button>
+    </div>
     </div>
   );
 }

@@ -48,6 +48,23 @@ def get_student_by_registration(registration_number: str) -> dict | None:
         "section": row[5]
     }
 
+def get_student_context(registration_number: str) -> str | None:
+    """
+    Fetch a student and format their info as a short context string,
+    ready to inject into a prompt alongside document chunks.
+    """
+    student = get_student_by_registration(registration_number)
+    if student is None:
+        return None
+
+    return (
+        f"Student: {student['name']}, "
+        f"Registration: {student['registration_number']}, "
+        f"Course: {student['course']}, "
+        f"Semester: {student['semester']}, "
+        f"Section: {student['section']}"
+    )
+
+
 if __name__ == "__main__":
-    result = get_student_by_id(1)
-    print(result)
+    print(get_student_context("2025-CS-114"))
