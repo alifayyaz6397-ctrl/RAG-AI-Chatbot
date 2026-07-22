@@ -2,106 +2,387 @@ html,
 body {
     margin: 0;
     padding: 0;
-    background: #1f202b;
-    color: white;
+     width: 100%;
+    height: 100%;
+    overflow: hidden;
+
+    background: #171717;
+    color: #ECECEC;
     font-family: Arial, Helvetica, sans-serif;
-    min-height: 100%;
 }
 
 #root {
-    min-height: 100vh;
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
 }
 
-.container {
-    width: 70%;
-    margin: 0 auto;
+/* ===========================
+   App Layout (Sidebar + Main)
+=========================== */
+
+.app {
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    flex-direction: row;
+    background: #171717;
+    overflow: hidden;
+}
+
+/* ===========================
+   Sidebar
+=========================== */
+
+.sidebar {
+    width: 280px;
+    flex-shrink: 0;
+
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+
+    background: #171717;
+    border-right: 1px solid #2f2f2f;
+
+    box-sizing: border-box;
 }
 
+
+.logo {
+    /* flex-shrink: 0;
+    padding: 20px 16px;
+    font-size: 18px;
+    font-weight: bold;
+    border-bottom: 1px solid #2f2f2f; */
+    display: none;
+}
+
+.sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 8px;
+}
+
+.sidebar-footer {
+    flex-shrink: 0;
+    padding: 12px 16px;
+    border-top: 1px solid #2f2f2f;
+}
+
+/* ===========================
+   Main Area
+=========================== */
+
+.main {
+    flex: 1;
+    min-width: 0;
+
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+
+    background: #171717;
+    overflow: hidden;
+}
+
+/* ===========================
+   Header
+=========================== */
+
 h1 {
+    margin: 0;
+    padding: 24px 0;
+
     text-align: center;
-    margin: 20px 0;
+
+    background: #171717;
+
+    position: sticky;
+    top: 0;
+    z-index: 100;
+
     flex-shrink: 0;
 }
 
+/* ===========================
+   Scrollable Chat Area
+=========================== */
+
+.chat-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: #171717;
+}
+
+/* No more margin-left hack — sidebar is a real flex sibling now */
+.content {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+/* ===========================
+   Messages
+=========================== */
+
 .chat-box {
+    width: 100%;
+    max-width: 900px;
+
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    padding: 20px 0 120px 0;
+
+    gap: 22px;
+
+    padding: 25px 20px 35px;
+
+    box-sizing: border-box;
 }
 
 .user-message {
     align-self: flex-end;
-    background: #3b82f6;
+    background: #303030;
     color: white;
-    padding: 15px;
-    border-radius: 20px;
-    max-width: 70%;
-    word-wrap: break-word;
+    padding: 15px 18px;
+    border-radius: 24px;
+    max-width: 75%;
+    word-break: break-word;
     white-space: pre-wrap;
+    line-height: 1.7;
 }
 
 .assistant-message {
     align-self: flex-start;
-    background: #3d3f53;
-    color: white;
-    padding: 15px;
-    border-radius: 20px;
-    max-width: 70%;
-    word-wrap: break-word;
+    background: #303030;
+    color: #ECECEC;
+    padding: 15px 18px;
+    border-radius: 24px;
+    max-width: 75%;
+    word-break: break-word;
     white-space: pre-wrap;
+    line-height: 1.7;
 }
+
+/* ===========================
+   Footer
+=========================== */
+
+.footer {
+    background: #171717;
+    padding: 16px 0 22px;
+    flex-shrink: 0;
+}
+
+.footer .content {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+/* ===========================
+   Input
+=========================== */
 
 .input-area {
-    position: sticky;
-    bottom: 20px;
+    width: 100%;
+    max-width: 900px;
+    min-height: 52px; /* ensures a consistent starting height */
 
     display: flex;
-    align-items: center;
-    gap: 10px;
+    align-items: center; /* back to center, not flex-end */
 
-    background: #30313d;
-
+    gap: 12px;
+    background: #303030;
     border-radius: 30px;
-
-    padding: 10px 15px;
-
-    margin: 20px 0;
+    padding: 12px 18px;
+    box-sizing: border-box;
 }
 
-.input-area input {
+.input-area textarea {
     flex: 1;
-
+    resize: none;
+text-align: left;
     border: none;
     outline: none;
-
     background: transparent;
-
-    color: white;
-
+    color: #ECECEC;
     font-size: 17px;
+    font-family: inherit;
+    line-height: 1.5;
+    max-height: 200px;
+    padding: 0;
+
+    scrollbar-width: none; /* Firefox */
+}
+
+.input-area textarea::-webkit-scrollbar {
+    display: none; /* Chrome, Edge, Safari */
+}
+
+.input-area textarea::placeholder {
+    color: #9A9A9A;
 }
 
 .input-area input::placeholder {
-    color: #b5b5b5;
+    color: #9A9A9A;
 }
 
 .input-area button {
-    width: 42px;
-    height: 42px;
-
+    width: 46px;
+    height: 46px;
     border: none;
-
     border-radius: 50%;
-
-    background: #4f8cff;
-
+    background: #2f7df6;
     color: white;
-
     font-size: 20px;
-
     cursor: pointer;
+    transition: .2s;
+}
+
+.input-area button:hover {
+    background: #2368d7;
+}
+
+/* ===========================
+   Scrollbars (both, shared style)
+=========================== */
+
+.chat-wrapper::-webkit-scrollbar,
+.sidebar-content::-webkit-scrollbar {
+    width: 10px;
+}
+
+.chat-wrapper::-webkit-scrollbar-track,
+.sidebar-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.chat-wrapper::-webkit-scrollbar-thumb,
+.sidebar-content::-webkit-scrollbar-thumb {
+    background: #4a4a4a;
+    border-radius: 20px;
+}
+
+.chat-wrapper::-webkit-scrollbar-thumb:hover,
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
+
+.assistant-message p,
+.user-message p {
+    margin: 0;
+}
+
+.assistant-message p + p,
+.user-message p + p {
+    margin-top: 10px;
+}
+
+.assistant-message ul,
+.assistant-message ol {
+    margin: 8px 0;
+    padding-left: 22px;
+}
+
+.assistant-message code {
+    background: #1e1e1e;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.assistant-message pre {
+    background: #1e1e1e;
+    padding: 12px 14px;
+    border-radius: 10px;
+    overflow-x: auto;
+}
+
+.assistant-message pre code {
+    background: none;
+    padding: 0;
+}
+
+.assistant-message a {
+    color: #6ea8fe;
+}
+
+.user-message-wrapper {
+    align-self: flex-end;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    max-width: 75%;
+}
+
+.assistant-message-wrapper {
+    align-self: flex-start;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 75%;
+}
+
+/* remove align-self/max-width from the bubbles themselves since the wrapper now handles it */
+.user-message,
+.assistant-message {
+    max-width: 100%;
+}
+
+.copy-btn {
+    margin-top: 4px;
+    background: none;
+    border: none;
+    color: #9A9A9A;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.2s, color 0.2s;
+}
+
+.user-message-wrapper:hover .copy-btn,
+.assistant-message-wrapper:hover .copy-btn {
+    opacity: 1;
+}
+
+.copy-btn:hover {
+    color: #ECECEC;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+
+.copy-btn:hover {
+    color: #ECECEC;
+} 
+
+.spin {
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.input-area button:disabled {
+    background: #4a4a4a;
+    cursor: not-allowed;
+}
+
+.input-area textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.assistant-message.error {
+    background: #3a1f1f;
+    color: #ff8080;
 }
