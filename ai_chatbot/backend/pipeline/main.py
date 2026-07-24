@@ -1,41 +1,3 @@
-# from fastapi import FastAPI
-# from pydantic import BaseModel
-# from retrieval import retrieve_chunks
-# from generation import generate_answer
-# from students import get_student_context
-# from fastapi.middleware.cors import CORSMiddleware
-# from fastapi.responses import StreamingResponse
-
-# app = FastAPI()
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=[
-#         "http://localhost:5173",
-#     ],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
-# class ChatRequest(BaseModel):
-#     question: str
-#     registration_number: str | None = None
-
-
-# @app.post("/api/chat")
-# async def chat(request: ChatRequest):
-
-#     student_ctx = None
-#     if request.registration_number:
-#         student_ctx = get_student_context(request.registration_number)
-
-#     chunks = retrieve_chunks(request.question)
-
-#     return StreamingResponse(
-#         generate_answer(request.question, chunks, student_ctx),
-#         media_type="text/plain"
-#     )
-
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
@@ -81,8 +43,16 @@ async def chat(request: ChatRequest):
     )
 
 
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+
 @app.post("/api/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
+    # Check file size before doing anything else
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        return {"error": "File too large (max 20MB)"}
+    await file.seek(0)
+
     # Save the uploaded file temporarily
     temp_path = f"temp_{file.filename}"
     with open(temp_path, "wb") as f:
@@ -126,8 +96,8 @@ async def upload_document(file: UploadFile = File(...)):
     conn.close()
 
     return {
-        "document_id": document_id, 
-        "filename": file.filename, 
+        "document_id": document_id,
+        "filename": file.filename,
         "chunks_created": len(chunks)
     }
 
