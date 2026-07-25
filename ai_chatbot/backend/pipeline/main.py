@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Depends
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
 from generation import generate_answer
@@ -12,6 +12,8 @@ from chunking import chunk_text
 from embedding import embed_text
 from storage import get_connection
 
+from Auth import router as auth_router, verify_token
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -23,17 +25,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Signup / login / /me routes now live in auth.py
+app.include_router(auth_router)
+
+
 class ChatRequest(BaseModel):
     question: str
-    registration_number: str | None = None
+    # registration_number removed -- identity now comes from the
+    # verified JWT (user["linked_id"]), never from client input
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, user=Depends(verify_token)):
 
     student_ctx = None
-    if request.registration_number:
-        student_ctx = get_student_context(request.registration_number)
+    if user["role"] == "student":
+        # linked_id is the student's internal student_id, taken from the
+        # verified token -- not something the client can override
+        student_ctx = get_student_context(user["linked_id"])
 
     chunks = retrieve_chunks(request.question)
 
@@ -46,6 +55,7 @@ async def chat(request: ChatRequest):
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 
 @app.post("/api/documents/upload")
+
 async def upload_document(file: UploadFile = File(...)):
     # Check file size before doing anything else
     contents = await file.read()
@@ -54,11 +64,11 @@ async def upload_document(file: UploadFile = File(...)):
     await file.seek(0)
 
     # Save the uploaded file temporarily
+
     temp_path = f"temp_{file.filename}"
     with open(temp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    # Extract text (PDF only for now; MD handling added separately)
     if file.filename.lower().endswith(".pdf"):
         text = extract_text_from_pdf(temp_path)
     elif file.filename.lower().endswith(".md"):
@@ -70,7 +80,6 @@ async def upload_document(file: UploadFile = File(...)):
 
     os.remove(temp_path)
 
-    # Insert into documents table, get its id
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -80,7 +89,6 @@ async def upload_document(file: UploadFile = File(...)):
     document_id = cur.fetchone()[0]
     conn.commit()
 
-    # Chunk, embed, and store each chunk
     chunks = chunk_text(text)
     for i, chunk in enumerate(chunks):
         vector = embed_text(chunk)
@@ -101,8 +109,12 @@ async def upload_document(file: UploadFile = File(...)):
         "chunks_created": len(chunks)
     }
 
+
 @app.get("/api/documents/{document_id}/chunks")
-async def preview_chunks(document_id: int):
+async def preview_chunks(document_id: int, user=Depends(verify_token)):
+    if user["role"] != "admin":
+        return {"error": "Only admins can view chunk previews"}
+
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -127,12 +139,15 @@ async def preview_chunks(document_id: int):
         "chunks": [{"chunk_index": r[0], "content": r[1]} for r in rows]
     }
 
+
 @app.delete("/api/documents/{document_id}")
-async def delete_document(document_id: int):
+async def delete_document(document_id: int, user=Depends(verify_token)):
+    if user["role"] != "admin":
+        return {"error": "Only admins can delete documents"}
+
     conn = get_connection()
     cur = conn.cursor()
 
-    # Check the document actually exists first
     cur.execute("SELECT filename FROM documents WHERE id = %s", (document_id,))
     row = cur.fetchone()
     if row is None:
@@ -142,7 +157,6 @@ async def delete_document(document_id: int):
 
     filename = row[0]
 
-    # Delete chunks first, then the document itself
     cur.execute("DELETE FROM knowledge_chunks WHERE document_id = %s", (document_id,))
     chunks_deleted = cur.rowcount
 

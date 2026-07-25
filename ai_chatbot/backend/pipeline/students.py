@@ -1,11 +1,11 @@
 from storage import get_connection
 
-def get_student_by_id(student_id: int) -> dict | None:
-    """Fetch a single student's info by their student_id."""
+def get_student_by_id(student_id: str) -> dict | None:
+    """Fetch a single student's info by their id (e.g. '2025-CS-01')."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT student_id, name, registration_number, course, semester, section FROM students WHERE student_id = %s",
+        "SELECT id, name, email, department_id, enrollment_year, tenant_id FROM students WHERE id = %s",
         (student_id,)
     )
     row = cur.fetchone()
@@ -16,21 +16,22 @@ def get_student_by_id(student_id: int) -> dict | None:
         return None
 
     return {
-        "student_id": row[0],
+        "id": row[0],
         "name": row[1],
-        "registration_number": row[2],
-        "course": row[3],
-        "semester": row[4],
-        "section": row[5]
+        "email": row[2],
+        "department_id": row[3],
+        "enrollment_year": row[4],
+        "tenant_id": row[5]
     }
 
-def get_student_by_registration(registration_number: str) -> dict | None:
-    """Fetch a single student's info by their registration number."""
+
+def get_student_by_email(email: str) -> dict | None:
+    """Fetch a single student's info by their email."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT student_id, name, registration_number, course, semester, section FROM students WHERE registration_number = %s",
-        (registration_number,)
+        "SELECT id, name, email, department_id, enrollment_year, tenant_id FROM students WHERE email = %s",
+        (email,)
     )
     row = cur.fetchone()
     cur.close()
@@ -40,31 +41,31 @@ def get_student_by_registration(registration_number: str) -> dict | None:
         return None
 
     return {
-        "student_id": row[0],
+        "id": row[0],
         "name": row[1],
-        "registration_number": row[2],
-        "course": row[3],
-        "semester": row[4],
-        "section": row[5]
+        "email": row[2],
+        "department_id": row[3],
+        "enrollment_year": row[4],
+        "tenant_id": row[5]
     }
 
-def get_student_context(registration_number: str) -> str | None:
+
+def get_student_context(student_id: str) -> str | None:
     """
     Fetch a student and format their info as a short context string,
     ready to inject into a prompt alongside document chunks.
     """
-    student = get_student_by_registration(registration_number)
+    student = get_student_by_id(student_id)
     if student is None:
         return None
 
     return (
         f"Student: {student['name']}, "
-        f"Registration: {student['registration_number']}, "
-        f"Course: {student['course']}, "
-        f"Semester: {student['semester']}, "
-        f"Section: {student['section']}"
+        f"ID: {student['id']}, "
+        f"Department: {student['department_id']}, "
+        f"Enrollment Year: {student['enrollment_year']}"
     )
 
 
 if __name__ == "__main__":
-    print(get_student_context("2025-CS-114"))
+    print(get_student_context("2025-CS-01"))

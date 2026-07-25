@@ -1,11 +1,22 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./App.css";
+import { useAuth } from "./AuthContext";
+import Login from "./Login";
+import Signup from "./Signup";
 import { Copy, Check, Send, Loader2 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { AuthProvider } from './AuthContext';
+
+
+
 // inside your component
 
 function App() {
+ 
+  const [showSignup, setShowSignup] = useState(false);
+
+  const { token, role, logout } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [regNumber, setRegNumber] = useState("");
@@ -76,11 +87,12 @@ function copyToClipboard(text, index) {
 
     const response = await fetch("http://127.0.0.1:8000/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: question,
-        registration_number: regNumber.trim() || null,
-      }),
+      headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`,
+  },
+      body: JSON.stringify({ question: question }),
+  
     });
 
     console.log("Status:", response.status);
@@ -143,6 +155,11 @@ function copyToClipboard(text, index) {
     setIsSending(false);
   }  
 }
+if (!token) {
+    return showSignup
+      ? <Signup onSwitchToLogin={() => setShowSignup(false)} />
+      : <Login onSwitchToSignup={() => setShowSignup(true)} />;
+  }
   return (
     <div className="app">
       {/* ---------- Sidebar ---------- */}
@@ -156,8 +173,15 @@ function copyToClipboard(text, index) {
 
         {/* User info / Settings */}
 
-        <div className="sidebar-footer"></div>
+        <div className="sidebar-footer">
+  <div className="user-info">
+    <span className="user-role">{role}</span>
+    <button onClick={logout} className="logout-btn">Log out</button>
+  </div>
+</div>
       </div>
+      
+
 
       {/* ---------- Main Chat Area ---------- */}
 
