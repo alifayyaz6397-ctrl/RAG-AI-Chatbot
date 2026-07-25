@@ -11,7 +11,6 @@ from pdf_parser import extract_text_from_pdf
 from chunking import chunk_text
 from embedding import embed_text
 from storage import get_connection
-
 from Auth import router as auth_router, verify_token
 
 app = FastAPI()
@@ -54,6 +53,37 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 
+@app.get("/api/documents")
+async def list_documents(user=Depends(verify_token)):
+    if user["role"] != "admin":
+        return {"error": "Only admins can view the document list"}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT d.id, d.filename, d.upload_date, COUNT(k.id) as chunk_count
+        FROM documents d
+        LEFT JOIN knowledge_chunks k ON k.document_id = d.id
+        GROUP BY d.id, d.filename, d.upload_date
+        ORDER BY d.upload_date DESC
+        """
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return {
+        "documents": [
+            {
+                "id": r[0],
+                "filename": r[1],
+                "upload_date": r[2].isoformat() if r[2] else None,
+                "chunk_count": r[3]
+            }
+            for r in rows
+        ]
+    }
 @app.post("/api/documents/upload")
 
 async def upload_document(file: UploadFile = File(...)):
