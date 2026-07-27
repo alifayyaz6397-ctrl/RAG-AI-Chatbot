@@ -1,13 +1,15 @@
 import os
 from dotenv import load_dotenv
 from google import genai
+from storage import get_connection
+import json
 
 load_dotenv()
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def generate_answer(question: str, chunks: list[dict], student_context: str | None = None):
+def generate_answer(question: str, chunks: list[dict], user,student_context: str | None = None):
 
     context = "\n\n".join(
         f"[Source: {c['source']}]\n{c['content']}"
@@ -33,22 +35,25 @@ Answer:
         model="gemini-3.6-flash",
         contents=prompt
     )
-
+    full_answer=""
     for chunk in response:
         if chunk.text:
+            full_answer+=chunk.text
             yield chunk.text
+    messages=[
+        {"role":"user", "content":question},
+        {"role":"assistant","content":full_answer,"retrieved_chunk_id":[c["id"] for c in chunks if "id" in c ]}
+    ]
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO conversations (user_id, role, messages, tenant_id)
+           VALUES (%s, %s, %s, %s)""",
+        (user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"])
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+            
 
 
-if __name__ == "__main__":
-    from retrieval import retrieve_chunks
-    from students import get_student_context
-
-    question = input("Ask a question: ")
-    reg = input("Registration number (optional, press enter to skip): ").strip()
-
-    student_ctx = get_student_context(reg) if reg else None
-    chunks = retrieve_chunks(question)
-
-    print("\nAnswer:\n")
-    for piece in generate_answer(question, chunks, student_ctx):
-        print(piece, end="", flush=True)

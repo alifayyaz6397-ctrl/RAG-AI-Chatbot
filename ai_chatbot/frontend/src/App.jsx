@@ -13,7 +13,7 @@ const API_BASE = "http://127.0.0.1:8000";
 function App() {
   const { token, role, logout } = useAuth();
   const [showSignup, setShowSignup] = useState(false);
-
+  const [citationStats, setCitationStats] = useState([]);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [isSending, setIsSending] = useState(false);
@@ -53,6 +53,8 @@ function App() {
   useEffect(() => {
     if (token && role === "admin") {
       fetchDocuments();
+       fetchChunkCount();
+      
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, role]);
@@ -68,7 +70,19 @@ function App() {
       console.error("Failed to load documents", err);
     }
   }
-
+async function fetchChunkCount() {
+  try {
+    const res = await fetch(`${API_BASE}/api/documents/citation-stats`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    setCitationStats(data.chunk_stats || []);
+    // console.log("Citation Stats:", data.chunk_stats);
+    // console.log("Documents:", documents);
+  } catch (err) {
+    console.error("Failed to load document stats", err);
+  }
+}
   async function handleUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -246,7 +260,12 @@ function App() {
                     </div>
                     <div className="doc-sidebar-info">
                       <span className="doc-sidebar-name">{doc.filename}</span>
-                      <span className="doc-sidebar-meta">{doc.chunk_count} chunks</span>
+                      <span className="doc-sidebar-meta">
+                        {doc.chunk_count} chunks
+                        {citationStats.find((s) => s.document_id === doc.id) &&
+                          ` · cited ${citationStats.find((s) => s.document_id === doc.id).chunk_count}x`}
+                          
+                      </span>
                     </div>
                     <button
                       className="doc-sidebar-delete"

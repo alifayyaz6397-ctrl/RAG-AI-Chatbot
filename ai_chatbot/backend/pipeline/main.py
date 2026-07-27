@@ -44,9 +44,9 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         student_ctx = get_student_context(user["linked_id"])
 
     chunks = retrieve_chunks(request.question)
-
+    # print (chunks)      //print retreived chunks
     return StreamingResponse(
-        generate_answer(request.question, chunks, student_ctx),
+        generate_answer(request.question, chunks, user, student_ctx),
         media_type="text/plain"
     )
 
@@ -202,3 +202,41 @@ async def delete_document(document_id: int, user=Depends(verify_token)):
         "chunks_deleted": chunks_deleted,
         "status": "deleted"
     }
+@app.get("/api/documents/citation-stats")
+async def citation_stats(user=Depends(verify_token)):
+    if user["role"] != "admin":
+            return {"error": "Only admins can view the document stats"}
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(r"""SELECT
+    d.id AS document_id,
+    d.filename,
+    COALESCE(stats.chunk_retrieval_count, 0) AS chunk_retrieval_count
+FROM documents d
+LEFT JOIN (
+    SELECT
+        k.document_id,
+        COUNT(*) AS chunk_retrieval_count
+    FROM conversations c
+    CROSS JOIN LATERAL jsonb_array_elements(c.messages) AS msg
+    CROSS JOIN LATERAL jsonb_array_elements_text(msg -> 'retrieved_chunk_id') AS chunk_id
+    JOIN knowledge_chunks k
+        ON chunk_id ~ '^\d+$' AND k.id = chunk_id::integer
+    WHERE msg ->> 'role' = 'assistant'
+    GROUP BY k.document_id
+) stats ON stats.document_id = d.id
+ORDER BY chunk_retrieval_count DESC;""")
+    rows=cur.fetchall()
+    cur.close()
+    conn.close()
+    return({
+        "chunk_stats":[
+            {
+                "document_id":r[0],
+                "document_name":r[1],
+                "chunk_count":r[2]
+            }
+            for r in rows 
+        ]
+        }
+    )

@@ -13,7 +13,7 @@
 .docs-section {
   display: flex;
   flex-direction: column;
-  max-height: 52%;
+  max-height: 100%;
   overflow-y: auto;
   padding: 4px 8px 16px;
   margin-bottom: 8px;
@@ -44,10 +44,10 @@
 }
 
 .docs-section-title {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
   font-weight: bold;
-  color: #e5dede;
+  color: #d1cccc;
   letter-spacing: 0.01em;
   padding: 6px 6px 12px;
 }
@@ -109,7 +109,7 @@
 
 .doc-sidebar-meta {
   font-size: 11px;
-  color: #6b6b6b;
+  color: #9c9797;
 }
 
 .doc-sidebar-delete {

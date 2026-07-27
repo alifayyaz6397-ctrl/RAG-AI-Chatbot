@@ -24,7 +24,7 @@ def retrieve_chunks(question: str, top_k: int = 5) -> list[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT source_document, chunk_index, content,
+        SELECT id, source_document, chunk_index, content,
                embedding <=> %s::vector AS distance
         FROM knowledge_chunks
         ORDER BY distance
@@ -37,7 +37,7 @@ def retrieve_chunks(question: str, top_k: int = 5) -> list[dict]:
     conn.close()
 
     return [
-        {"source": r[0], "chunk_index": r[1], "content": r[2], "distance": r[3]}
+        {"id": r[0], "source": r[1], "chunk_index": r[2], "content": r[3], "distance": r[4]}
         for r in rows
     ]
 
