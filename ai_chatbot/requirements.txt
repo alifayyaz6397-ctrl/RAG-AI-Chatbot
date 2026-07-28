@@ -39,3 +39,5 @@ uvicorn==0.51.0
 websockets==16.1
 psycopg2-binary==2.9.10
 pgvector==0.4.1
+pyjwt==2.10.1
+bcrypt==4.2.1
