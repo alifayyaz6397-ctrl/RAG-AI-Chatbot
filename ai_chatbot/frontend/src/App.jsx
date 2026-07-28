@@ -53,11 +53,16 @@ function App() {
   useEffect(() => {
     if (token && role === "admin") {
       fetchDocuments();
-       fetchChunkCount();
+      fetchChunkCount();
+      
       
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, role]);
+  
+  useEffect(()=>{
+    setMessages([])
+  },[token]);
 
   async function fetchDocuments() {
     try {
