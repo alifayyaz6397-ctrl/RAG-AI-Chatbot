@@ -12,6 +12,8 @@ from chunking import chunk_text
 from embedding import embed_text
 from storage import get_connection
 from Auth import router as auth_router, verify_token
+from invigilator import generate_invigilator_answer
+from retrieval import retrieve_exam_chunks
 
 app = FastAPI()
 app.add_middleware(
@@ -240,3 +242,15 @@ ORDER BY chunk_retrieval_count DESC;""")
         ]
         }
     )
+
+class ExamChatRequest(BaseModel):
+    question: str
+
+@app.post("/api/exam/chat")
+async def exam_chat(request: ExamChatRequest, user=Depends(verify_token)):
+    if user["role"] != "student":
+        return {"error": "Exam mode is only available to students"}
+
+    chunks = retrieve_exam_chunks(request.question)
+    answer = generate_invigilator_answer(request.question, chunks, user)
+    return {"answer": answer}
