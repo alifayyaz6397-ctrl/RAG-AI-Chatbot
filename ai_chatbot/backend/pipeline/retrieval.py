@@ -41,10 +41,42 @@ def retrieve_chunks(question: str, top_k: int = 5) -> list[dict]:
         for r in rows
     ]
 
+def retrieve_exam_chunks(question: str, top_k: int = 3) -> list[dict]:
+    """Same as retrieve_chunks but scoped to exam_rules documents only."""
+    query_vector = embed_query(question)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT k.id, k.source_document, k.chunk_index, k.content,
+               k.embedding <=> %s::vector AS distance
+        FROM knowledge_chunks k
+        JOIN documents d ON d.id = k.document_id
+        WHERE d.document_type = 'exam_rules'
+        ORDER BY distance
+        LIMIT %s
+        """,
+        (query_vector, top_k)
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return [
+        {"id": r[0], "source": r[1], "chunk_index": r[2], "content": r[3], "distance": r[4]}
+        for r in rows
+    ]
 
 if __name__ == "__main__":
-    results = retrieve_chunks("test question here")
-    for r in results:
+    print("--- general (unscoped) ---")
+    for r in retrieve_chunks("test question here"):
+        print(f"[{r['source']} #{r['chunk_index']}] dist={r['distance']:.3f}")
+        print(r['content'][:100])
+        print()
+
+    print("--- exam only (scoped) ---")
+    for r in retrieve_exam_chunks("test question here"):
         print(f"[{r['source']} #{r['chunk_index']}] dist={r['distance']:.3f}")
         print(r['content'][:100])
         print()

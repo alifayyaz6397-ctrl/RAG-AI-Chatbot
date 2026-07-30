@@ -86,7 +86,7 @@ async def list_documents(user=Depends(verify_token)):
     }
 @app.post("/api/documents/upload")
 
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), document_type: str = "general"):
     # Check file size before doing anything else
     contents = await file.read()
     if len(contents) > MAX_FILE_SIZE:
@@ -113,8 +113,8 @@ async def upload_document(file: UploadFile = File(...)):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO documents (filename) VALUES (%s) RETURNING id",
-        (file.filename,)
+        "INSERT INTO documents (filename, document_type) VALUES (%s, %s) RETURNING id",
+        (file.filename, document_type)
     )
     document_id = cur.fetchone()[0]
     conn.commit()
