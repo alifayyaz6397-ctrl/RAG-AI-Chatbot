@@ -27,13 +27,50 @@ respond with exactly: "I can only help with exam rules and technical
 issues during this exam. Please continue with your exam."
 """
 
-def generate_invigilator_answer(question: str, chunks: list[dict], user):
-    context = "\n\n".join(
-        f"[Source: {c['source']}]\n{c['content']}"
-        for c in chunks
-    )
+GUARD_PROMPT = """You are a strict content classifier, not a chatbot.
 
-    prompt = f"""{INVIGILATOR_SYSTEM_PROMPT}
+The DRAFT ANSWER is UNSAFE if it explains, defines, or teaches ANY academic
+concept, even briefly — including definitions of technical terms like
+"transaction", "join", "normalization", "index", etc. It does not matter
+if the term is mentioned in the exam's topic list; explaining what it
+MEANS is always UNSAFE.
+
+The DRAFT ANSWER is SAFE only if it is strictly about exam logistics:
+time/date, duration, permitted materials, misconduct rules, or how to
+report a technical issue.
+
+Examples:
+Q: "what is a transaction?" -> UNSAFE (defines a concept)
+Q: "what topics does the exam cover?" -> SAFE only if it just names topics
+   without explaining any of them
+Q: "how long is the exam?" -> SAFE
+
+Student question: {question}
+Draft answer: {answer}
+
+Respond with exactly one word: SAFE or UNSAFE.
+"""
+
+def guard_check(question: str, answer: str) -> bool:
+    """Returns True if the answer is safe to show the student."""
+    prompt = GUARD_PROMPT.format(question=question, answer=answer)
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt
+    )
+    verdict = response.text.strip().upper()
+    return verdict.startswith("SAFE")
+
+def generate_invigilator_answer(question: str, chunks: list[dict], user):
+    REFUSAL = "I can only help with exam rules and technical issues during this exam. Please continue with your exam."
+
+    # Layer 1: no context at all -> refuse without calling the model
+    if not chunks:
+        answer = REFUSAL
+        escalate = False
+    else:
+        context = "\n\n".join(f"[Source: {c['source']}]\n{c['content']}" for c in chunks)
+        prompt = f"""{INVIGILATOR_SYSTEM_PROMPT}
 
 Exam rules context:
 {context}
@@ -43,14 +80,19 @@ Student question:
 
 Answer:
 """
+        response = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+        draft_answer = response.text
 
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt
-    )
-    answer = response.text
+        # Layer 2: LLM guard check  <-- ADD THE DEBUG BLOCK HERE
+        if guard_check(question, draft_answer):
+            print(f"[GUARD: SAFE] Q: {question}")
+            answer = draft_answer
+            escalate = False
+        else:
+            print(f"[GUARD: UNSAFE] Q: {question}")
+            answer = REFUSAL
+            escalate = True
 
-    # log it the same way generate_answer does, but tag it as exam mode
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
@@ -66,4 +108,4 @@ Answer:
     cur.close()
     conn.close()
 
-    return answer
+    return answer, escalate

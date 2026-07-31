@@ -252,5 +252,5 @@ async def exam_chat(request: ExamChatRequest, user=Depends(verify_token)):
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
-    answer = generate_invigilator_answer(request.question, chunks, user)
-    return {"answer": answer}
+    answer, escalate = generate_invigilator_answer(request.question, chunks, user)
+    return {"answer": answer, "escalate": escalate}

@@ -41,6 +41,8 @@ def retrieve_chunks(question: str, top_k: int = 5) -> list[dict]:
         for r in rows
     ]
 
+MAX_DISTANCE = 0.35  # tune against your real data
+
 def retrieve_exam_chunks(question: str, top_k: int = 3) -> list[dict]:
     """Same as retrieve_chunks but scoped to exam_rules documents only."""
     query_vector = embed_query(question)
@@ -65,7 +67,7 @@ def retrieve_exam_chunks(question: str, top_k: int = 3) -> list[dict]:
 
     return [
         {"id": r[0], "source": r[1], "chunk_index": r[2], "content": r[3], "distance": r[4]}
-        for r in rows
+        for r in rows if r[4] <= MAX_DISTANCE
     ]
 
 if __name__ == "__main__":
