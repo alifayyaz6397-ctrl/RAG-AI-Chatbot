@@ -32,7 +32,7 @@ from students import get_student_by_id
 router = APIRouter()
 security = HTTPBearer()
 
-SECRET_KEY = os.environ["JWT_SECRET"]  # must be set -- no silent weak default
+SECRET_KEY = os.environ["JWT_SECRET"]  
 ALGORITHM = "HS256"
 TOKEN_EXPIRY_HOURS = 8
 

@@ -63,7 +63,6 @@ def guard_check(question: str, answer: str) -> bool:
 
 def generate_invigilator_answer(question: str, chunks: list[dict], user):
     REFUSAL = "I can only help with exam rules and technical issues during this exam. Please continue with your exam."
-
     # Layer 1: no context at all -> refuse without calling the model
     if not chunks:
         answer = REFUSAL
@@ -92,18 +91,20 @@ Answer:
             print(f"[GUARD: UNSAFE] Q: {question}")
             answer = REFUSAL
             escalate = True
-
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
     ]
+  
     conn = get_connection()
     cur = conn.cursor()
+    print(type(user))
     cur.execute(
         """INSERT INTO conversations (user_id, role, messages, tenant_id, mode)
            VALUES (%s, %s, %s, %s, %s)""",
         (user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"], "exam")
     )
+    
     conn.commit()
     cur.close()
     conn.close()

@@ -246,11 +246,41 @@ ORDER BY chunk_retrieval_count DESC;""")
 class ExamChatRequest(BaseModel):
     question: str
 
+
 @app.post("/api/exam/chat")
-async def exam_chat(request: ExamChatRequest, user=Depends(verify_token)):
+async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
     if user["role"] != "student":
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
     answer, escalate = generate_invigilator_answer(request.question, chunks, user)
     return {"answer": answer, "escalate": escalate}
+
+# def fake_verify_token():
+#     return {
+#         "linked_id": "2026-SE-01",
+#         "role": "student",
+#         "tenant_id": "uet"
+#     }
+@app.get("/api/exam_mode")
+async def exam_mode(user=Depends(verify_token)):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM students s
+                JOIN exams e ON e.department_id = s.department_id AND e.semester_id = s.semester_id
+                WHERE s.id = %s
+                  AND now() BETWEEN e.start_at AND e.end_at
+            );
+            """,
+            (user["linked_id"],)
+        )
+        result = cur.fetchone()[0]
+        cur.close()
+        return {"exam_mode": result}
+    finally:
+        conn.close()
