@@ -96,7 +96,7 @@ def signup(req: SignupRequest):
     cur.close()
     conn.close()
 
-    token = create_token(role="student", linked_id=req.student_id, tenant_id=tenant_id)
+    token = create_token(role="student", linked_id=req.student_id, tenant_id=tenant_id,username=req.username)
     return TokenResponse(access_token=token, role="student")
 
 
@@ -110,8 +110,8 @@ def login(req: LoginRequest):
     cur = conn.cursor()
 
     cur.execute(
-        """SELECT password_hash, role, student_id, instructor_id, admin_id, tenant_id
-           FROM user_info WHERE username = %s""",
+        """SELECT u.password_hash, u.role, u.student_id, u.instructor_id, u.admin_id, u.tenant_id,s.name,a.name,i.name
+           FROM user_info u LEFT JOIN students s on u.student_id=s.id LEFT JOIN instructors i on i.id=u.instructor_id LEFT JOIN admins a on a.id=u.admin_id WHERE u.username = %s""",
         (req.username,)
     )
     row = cur.fetchone()
@@ -121,14 +121,15 @@ def login(req: LoginRequest):
     if not row:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    password_hash, role, student_id, instructor_id, admin_id, tenant_id = row
+    password_hash, role, student_id, instructor_id, admin_id, tenant_id, student_name,admin_name,instructor_name = row
 
     if not bcrypt.checkpw(req.password.encode(), password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     linked_id = {"student": student_id, "instructor": instructor_id, "admin": admin_id}[role]
+    username = {"student": student_name, "instructor": instructor_name, "admin": admin_name}[role]
 
-    token = create_token(role=role, linked_id=linked_id, tenant_id=tenant_id)
+    token = create_token(role=role, linked_id=linked_id, tenant_id=tenant_id,username=username)
     return TokenResponse(access_token=token, role=role)
 
 
@@ -136,11 +137,12 @@ def login(req: LoginRequest):
 # JWT helpers
 # ---------------------------------------------------------
 
-def create_token(role: str, linked_id: str, tenant_id: str) -> str:
+def create_token(role: str, linked_id: str, tenant_id: str,username: str) -> str:
     payload = {
         "role": role,
         "linked_id": linked_id,
         "tenant_id": tenant_id,
+        "username": username,
         "exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRY_HOURS)
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -160,6 +162,3 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 # Example protected route
 # ---------------------------------------------------------
 
-@router.get("/me")
-def get_my_identity(user=Depends(verify_token)):
-    return {"role": user["role"], "linked_id": user["linked_id"], "tenant_id": user["tenant_id"]}

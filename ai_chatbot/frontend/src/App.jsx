@@ -29,6 +29,7 @@ function App() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewChunks, setPreviewChunks] = useState([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [examMode,setExamMode]=useState(true)
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -54,8 +55,6 @@ function App() {
     if (token && role === "admin") {
       fetchDocuments();
       fetchChunkCount();
-      
-      
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, role]);
@@ -64,6 +63,27 @@ function App() {
     setMessages([])
   },[token]);
 
+useEffect(() => {
+  if (!token || role !== "student") return;
+
+  fetchExamMode();
+
+  const intervalId = setInterval(() => {
+    fetchExamMode();
+  }, 30000);
+
+  return () => clearInterval(intervalId);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [token, role]);
+
+  async function fetchExamMode(){
+    const res =await fetch(`${API_BASE}/api/exam_mode`,{
+      headers:{Authorization:`Bearer ${token}`},
+    });
+    const data=await res.json();
+    setExamMode(data.exam_mode)
+  }
   async function fetchDocuments() {
     try {
       const res = await fetch(`${API_BASE}/api/documents`, {
@@ -75,6 +95,7 @@ function App() {
       console.error("Failed to load documents", err);
     }
   }
+  
 async function fetchChunkCount() {
   try {
     const res = await fetch(`${API_BASE}/api/documents/citation-stats`, {
@@ -172,7 +193,8 @@ async function fetchChunkCount() {
     setInput("");
 
     try {
-      const response = await fetch(`${API_BASE}/api/chat`, {
+      const url = examMode ? `exam/chat` : `chat`;
+      const response = await fetch(`${API_BASE}/api/${url}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -299,7 +321,16 @@ async function fetchChunkCount() {
       {/* ---------- Main Chat Area ---------- */}
 
       <div className="main">
-        <h1>Exam AI Chatbot</h1>
+       <div className="main-header">
+  <h1>Exam AI Chatbot</h1>
+  {examMode && (
+    <div className="exam-mode-badge">
+      <span className="exam-mode-dot" />
+      Exam Mode
+    </div>
+  )}
+</div>
+        
 
         <div className="chat-wrapper" ref={chatWrapperRef}>
           <div className="content">

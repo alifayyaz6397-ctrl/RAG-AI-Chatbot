@@ -1,4 +1,5 @@
 import sys
+import os
 import time
 from pdf_parser import extract_text_from_pdf
 from chunking import chunk_text
@@ -25,8 +26,23 @@ def ingest_document(pdf_path: str):
 
     print("Done.")
 
+# if __name__ == "__main__":
+#     if len(sys.argv) != 2:
+#         print("Usage: python ingest.py <path_to_pdf>")
+#         sys.exit(1)
+#     ingest_document(sys.argv[1])
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python ingest.py <path_to_pdf>")
+    pdf_path = input("Enter the path to the PDF file: ").strip().strip('"')
+    
+    if not pdf_path:
+        print("No path entered. Exiting.")
         sys.exit(1)
-    ingest_document(sys.argv[1])
+    
+    if not os.path.exists(pdf_path):
+        print(f"File not found: {pdf_path}")
+        sys.exit(1)
+    
+    if not pdf_path.lower().endswith(".pdf"):
+        print("Warning: file doesn't end in .pdf, continuing anyway.")
+    
+    ingest_document(pdf_path)

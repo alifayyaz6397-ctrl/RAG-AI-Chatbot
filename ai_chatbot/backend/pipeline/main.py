@@ -29,7 +29,6 @@ app.add_middleware(
 # Signup / login / /me routes now live in auth.py
 app.include_router(auth_router)
 
-
 class ChatRequest(BaseModel):
     question: str
     # registration_number removed -- identity now comes from the
@@ -253,34 +252,41 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
-    answer, escalate = generate_invigilator_answer(request.question, chunks, user)
-    return {"answer": answer, "escalate": escalate}
+    answer= generate_invigilator_answer(request.question, chunks, user)
+    return StreamingResponse(answer,media_type="plain/text")
 
-# def fake_verify_token():
-#     return {
-#         "linked_id": "2026-SE-01",
-#         "role": "student",
-#         "tenant_id": "uet"
-#     }
+def fake_verify_token():
+    return {
+        "linked_id": "2026-SE-03",
+        "role": "student",
+        "tenant_id": "uet",
+        "username" : "Noor"
+    }
 @app.get("/api/exam_mode")
 async def exam_mode(user=Depends(verify_token)):
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT EXISTS(
+    """
+    SELECT EXISTS(
                 SELECT 1
                 FROM students s
                 JOIN exams e ON e.department_id = s.department_id AND e.semester_id = s.semester_id
                 WHERE s.id = %s
-                  AND now() BETWEEN e.start_at AND e.end_at
-            );
-            """,
-            (user["linked_id"],)
-        )
+                  AND now() ::timestamp BETWEEN e.start_at AND e.end_at);
+				  
+    """,
+    (user["linked_id"],)
+)
         result = cur.fetchone()[0]
         cur.close()
         return {"exam_mode": result}
     finally:
         conn.close()
+        
+@app.get("/me")
+def get_my_identity(user=Depends(verify_token)):
+    print(user.keys())
+    return {"role": user["role"], "linked_id": user["linked_id"], "tenant_id": user["tenant_id"], "username" : user["username"]}
+
