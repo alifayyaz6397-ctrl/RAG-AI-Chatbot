@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Depends
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
 from generation import generate_answer
@@ -14,6 +14,9 @@ from storage import get_connection
 from Auth import router as auth_router, verify_token
 from invigilator import generate_invigilator_answer
 from retrieval import retrieve_exam_chunks
+from instructor import answer_instructor_question, ModelUnavailable
+from analytics import AnalyticsError, Scope, list_owned_exams
+import conversations as conversation_store
 
 app = FastAPI()
 app.add_middleware(
@@ -285,6 +288,88 @@ async def exam_mode(user=Depends(verify_token)):
     finally:
         conn.close()
         
+# ---------------------------------------------------------
+# Instructor analytics
+# ---------------------------------------------------------
+
+class InstructorChatRequest(BaseModel):
+    question: str
+
+
+@app.post("/api/instructor/chat")
+async def instructor_chat(request: InstructorChatRequest, user=Depends(verify_token)):
+    """Not a streamed response, unlike the student and exam chats: the useful
+    part of an analytics answer is the result table, and a table is structured
+    data rather than something to trickle out a token at a time."""
+    try:
+        return answer_instructor_question(request.question, user)
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ModelUnavailable:
+        # The question was never classified, so there is no report to fall back
+        # to -- unlike a failure in the report writer, which degrades to the
+        # raw numbers instead of failing.
+        raise HTTPException(
+            status_code=503,
+            detail="The analytics assistant is busy right now. Please try again in a moment.",
+        )
+
+
+@app.get("/api/instructor/exams")
+async def instructor_exams(user=Depends(verify_token)):
+    """The exams this instructor owns -- lets the UI show what is actually
+    reportable instead of making them guess at exam names."""
+    try:
+        return {"exams": list_owned_exams(Scope(user))}
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+# ---------------------------------------------------------
+# Conversation history
+# ---------------------------------------------------------
+
+@app.get("/api/conversations")
+async def list_my_conversations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(conversation_store.DEFAULT_PAGE_SIZE, ge=1, le=conversation_store.MAX_PAGE_SIZE),
+    mode: str | None = Query(None, description="general | exam | instructor"),
+    user=Depends(verify_token),
+):
+    return conversation_store.list_conversations(user, page=page, page_size=page_size, mode=mode)
+
+
+# Declared before /api/conversations/{conversation_id} would otherwise be a
+# concern, but the admin route sits under /api/admin/ so there is no clash.
+@app.get("/api/admin/conversations")
+async def list_all_conversations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(conversation_store.DEFAULT_PAGE_SIZE, ge=1, le=conversation_store.MAX_PAGE_SIZE),
+    user_id: str | None = Query(None),
+    role: str | None = Query(None, description="student | instructor | admin"),
+    mode: str | None = Query(None, description="general | exam | instructor"),
+    escalated: bool | None = Query(None),
+    user=Depends(verify_token),
+):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view all conversations")
+
+    return conversation_store.list_all_conversations(
+        user, page=page, page_size=page_size,
+        user_id=user_id, role=role, mode=mode, escalated=escalated,
+    )
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str, user=Depends(verify_token)):
+    conversation = conversation_store.get_conversation(user, conversation_id)
+    # "not yours" and "does not exist" deliberately collapse into one 404 so
+    # this cannot be used to enumerate other users' conversation ids.
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
 @app.get("/me")
 def get_my_identity(user=Depends(verify_token)):
     print(user.keys())
