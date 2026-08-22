@@ -3,9 +3,10 @@ import json
 from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
+from generation import create_conversation_id
 
 load_dotenv()
-
+conv_id=create_conversation_id();
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 INVIGILATOR_SYSTEM_PROMPT = """You are the Virtual Invigilator for an active exam session.
@@ -196,7 +197,7 @@ def classify_message(question: str) -> str:
     return "OTHER"
 
 
-def generate_invigilator_answer(question: str, chunks: list[dict], user):
+def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dict], user):
     """Yields (type, value) tuples: ('text', str) is visible answer content;
     ('event', dict) is metadata your route should send as a SEPARATE event,
     never concatenated into the displayed message -- that's what caused the
@@ -212,7 +213,7 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
                    "invigilator directly and in person right now -- don't "
                    "wait for a response here.")
         _record_escalation(question, user, reason="medical")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
         yield (answer)
         return
 
@@ -224,7 +225,7 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
         answer = ("I've logged this for your exam supervisor to review. "
                    "Soon he will contact you. "
                    "Continue your exam.")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
         yield (answer)
         return
 
@@ -236,14 +237,14 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
         answer = ("I've logged this issue for your exam supervisor to "
                     "Soon he will contact you. "
                     "Continue your exam.")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
         yield (answer)
         return
 
     # Layer 1: no context at all -> refuse without calling the model
     if not chunks:
         answer = REFUSAL
-        _save_conversation(question, answer, chunks, user, escalate=False)
+        _save_conversation(question, answer, chunks, user,session_id, escalate=False)
         yield (answer)
         return
 
@@ -281,11 +282,11 @@ Answer:
         for i in range(0, len(answer), 20):
             yield (answer[i:i + 20])
 
-    _save_conversation(question, answer, chunks, user, escalate=content_unsafe)
+    _save_conversation(question, answer, chunks, user,session_id, escalate=content_unsafe)
 
 
 
-def _save_conversation(question, answer, chunks, user, escalate):
+def _save_conversation(question, answer, chunks, user,session_id, escalate):
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
@@ -295,9 +296,9 @@ def _save_conversation(question, answer, chunks, user, escalate):
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO conversations (user_id, role, messages, tenant_id, mode, escalated)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"], "exam", escalate)
+            """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode, escalated,session_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s,%s)""",
+            (conv_id,user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"], "exam", escalate,session_id)
         )
         conn.commit()
         cur.close()

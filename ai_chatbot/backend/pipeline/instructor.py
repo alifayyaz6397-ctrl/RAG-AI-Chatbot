@@ -1,3 +1,6 @@
+from generation import create_conversation_id
+
+conv_id=create_conversation_id()
 """
 instructor.py -- natural language -> analytics for /api/instructor/chat.
 
@@ -66,7 +69,7 @@ def _generate(prompt: str, config: dict | None = None) -> str:
 
 # Self-reported confidence is a soft signal, not a probability -- it is used
 # only to separate "clearly one of our four reports" from "no idea".
-CONFIDENCE_THRESHOLD = 0.6
+CONFIDENCE_THRESHOLD = 0
 
 FALLBACK_ANSWER = (
     "I couldn't map that to a report. I can answer questions about: "
@@ -303,7 +306,7 @@ def write_report(question: str, result: dict) -> str:
     return answer or plain_summary(result)
 
 
-def answer_instructor_question(question: str, user) -> dict:
+def answer_instructor_question(question: str,session_id:str, user) -> dict:
     """Full pipeline. Always returns a dict -- never raises for an ordinary
     'I couldn't answer that', so the route stays simple."""
     scope = Scope(user)  # raises AnalyticsError for a non-instructor role
@@ -314,7 +317,7 @@ def answer_instructor_question(question: str, user) -> dict:
 
     if intent is None or confidence < CONFIDENCE_THRESHOLD:
         answer = FALLBACK_ANSWER
-        conversation_id = _save_conversation(question, answer, user, intent=None,
+        conversation_id = _save_conversation(session_id,question, answer, user, intent=None,
                                              confidence=confidence, result=None)
         return {"answer": answer, "intent": None, "confidence": confidence,
                 "data": None, "resolved": False,
@@ -324,14 +327,14 @@ def answer_instructor_question(question: str, user) -> dict:
         result = analytics.run_intent(scope, intent, classification["params"])
     except AnalyticsError as exc:
         answer = str(exc)
-        conversation_id = _save_conversation(question, answer, user, intent=intent,
+        conversation_id = _save_conversation(session_id,question, answer, user, intent=intent,
                                              confidence=confidence, result=None)
         return {"answer": answer, "intent": intent, "confidence": confidence,
                 "data": None, "resolved": False,
                 "conversation_id": conversation_id}
 
     answer = write_report(question, result)
-    conversation_id = _save_conversation(question, answer, user, intent=intent,
+    conversation_id = _save_conversation(session_id,question, answer, user, intent=intent,
                                          confidence=confidence, result=result)
 
     return {
@@ -346,7 +349,7 @@ def answer_instructor_question(question: str, user) -> dict:
     }
 
 
-def _save_conversation(question, answer, user, intent, confidence, result):
+def _save_conversation(session_id,question, answer, user, intent, confidence, result):
     """Instructor turns land in the same conversations table as student ones,
     with mode='instructor'. There are no retrieved chunks in this mode -- the
     answer came from SQL -- so retrieved_chunk_id stays an empty list to keep
@@ -370,10 +373,10 @@ def _save_conversation(question, answer, user, intent, confidence, result):
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO conversations (user_id, role, messages, tenant_id, mode)
-               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-            (user["linked_id"], user["role"], json.dumps(messages, default=str),
-             user["tenant_id"], "instructor")
+            """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode,session_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (conv_id,user["linked_id"], user["role"], json.dumps(messages, default=str),
+             user["tenant_id"], "instructor",session_id)
         )
         conversation_id = cur.fetchone()[0]
         conn.commit()

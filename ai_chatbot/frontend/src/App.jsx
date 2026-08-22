@@ -5,12 +5,28 @@ import "./DocsSidebar.css";
 import { useAuth } from "./AuthContext";
 import Login from "./Login";
 import Signup from "./Signup";
-import { Copy, Check, Send, Loader2, Paperclip, Trash2, X, FileText } from "lucide-react";
+import {
+  Copy,
+  Check,
+  Send,
+  Loader2,
+  Paperclip,
+  Trash2,
+  X,
+  FileText,
+  Summary,
+  MessageSquare,
+  Search,
+  ArrowLeft,
+  ThumbsUp,
+  ThumbsDown,
+} from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
+  // alert(localStorage.getItem("token"))
   const { token, role, logout } = useAuth();
   const [showSignup, setShowSignup] = useState(false);
   const [citationStats, setCitationStats] = useState([]);
@@ -29,7 +45,25 @@ function App() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewChunks, setPreviewChunks] = useState([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const [examMode,setExamMode]=useState(true)
+  const [examMode, setExamMode] = useState(false);
+  const [analyticMode, setAnalyticMode] = useState(false);
+  const [fetchExams, setFetchExams] = useState([]);
+  const [myConvo, setMyConvo] = useState([]);
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionChat, setSessionChat] = useState([]);
+  const [isNewSession, setIsNewSession] = useState(false);
+  const [searchChat, setSearchChat] = useState([]);
+  const [roleFilter, setRoleFilter] = useState("");
+  const [modeFilter, setModeFilter] = useState("");
+  const [escalatedFilter, setEscalatedFilter] = useState(null);
+  const [userIdFilter, setUserIdFilter] = useState(null);
+  const [adminPanelView, setAdminPanelView] = useState(null); // null | "chats" | "documents" — drives which center modal is open
+  const [examListOpen, setExamListOpen] = useState(false);
+  const [examDetailOpen, setExamDetailOpen] = useState(false);
+  const [selectedExam, setSelectedExam] = useState(null);
+  const [isLoadingExamDetail, setIsLoadingExamDetail] = useState(false);
+  const [selectedChatDetail, setSelectedChatDetail] = useState(null);
+  const [currentChatTitle, setCurrentChatTitle] = useState("New Chat");
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -43,7 +77,6 @@ function App() {
       textareaRef.current.style.height = "24px";
     }
   }, [input]);
-
   useEffect(() => {
     if (chatWrapperRef.current) {
       chatWrapperRef.current.scrollTop = chatWrapperRef.current.scrollHeight;
@@ -55,35 +88,78 @@ function App() {
     if (token && role === "admin") {
       fetchDocuments();
       fetchChunkCount();
+    } else if (token && role === "instructor") {
+      fetchInstructorExams();
     }
+    getMyConversation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, role]);
-  
-  useEffect(()=>{
-    setMessages([])
-  },[token]);
 
-useEffect(() => {
-  if (!token || role !== "student") return;
-
-  fetchExamMode();
-
-  const intervalId = setInterval(() => {
+  useEffect(() => {
+    if (!token || role !== "student") return;
     fetchExamMode();
-  }, 30000);
 
-  return () => clearInterval(intervalId);
+    const intervalId = setInterval(() => {
+      fetchExamMode();
+    }, 30000);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [token, role]);
+    return () => clearInterval(intervalId);
+  }, [token, role]);
 
-  async function fetchExamMode(){
-    const res =await fetch(`${API_BASE}/api/exam_mode`,{
-      headers:{Authorization:`Bearer ${token}`},
+  useEffect(() => {
+    setSessionId(crypto.randomUUID());
+    setIsNewSession(true);
+    setMessages([]);
+    setExamMode(false);
+    setAnalyticMode(false);
+    setFetchExams([]);
+    setCurrentChatTitle("New Chat");
+  }, [token]);
+
+  // Fetch latest client chats whenever the admin opens the Client Chats modal
+  // (adminSearchChat() reads current filter state, so empty filters -> latest chats).
+  useEffect(() => {
+    if (role === "admin" && adminPanelView === "chats") {
+      adminSearchChat();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, adminPanelView]);
+
+  async function adminSearchChat() {
+    const params = new URLSearchParams();
+    if (roleFilter) params.append("role", roleFilter);
+    if (modeFilter) params.append("mode", modeFilter);
+    if (escalatedFilter) params.append("escalated", escalatedFilter);
+    if (userIdFilter) params.append("user_id", userIdFilter);
+    const res = await fetch(`${API_BASE}/api/admin/conversations?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-    const data=await res.json();
-    setExamMode(data.exam_mode)
+    const data = await res.json();
+    setSearchChat(data.conversations || []);
   }
+
+  async function handleNewChat() {
+    setMessages([]);
+    setSessionId(crypto.randomUUID());
+    setIsNewSession(true);
+    setCurrentChatTitle("New Chat");
+  }
+  async function getMyConversation() {
+    const res = await fetch(`${API_BASE}/api/conversations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    setMyConvo(data.session || []);
+  }
+
+  async function fetchExamMode() {
+    const res = await fetch(`${API_BASE}/api/exam_mode`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    setExamMode(data.exam_mode);
+  }
+
   async function fetchDocuments() {
     try {
       const res = await fetch(`${API_BASE}/api/documents`, {
@@ -95,20 +171,49 @@ useEffect(() => {
       console.error("Failed to load documents", err);
     }
   }
-  
-async function fetchChunkCount() {
-  try {
-    const res = await fetch(`${API_BASE}/api/documents/citation-stats`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await res.json();
-    setCitationStats(data.chunk_stats || []);
-    // console.log("Citation Stats:", data.chunk_stats);
-    // console.log("Documents:", documents);
-  } catch (err) {
-    console.error("Failed to load document stats", err);
+  async function fetchInstructorExams() {
+    try {
+      // alert("fetchInstructorExams called");
+      const res = await fetch(`${API_BASE}/api/instructor/exams`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      // alert("Response: " + JSON.stringify(data));
+      setFetchExams(data.exams || []);
+    } catch (err) {
+      // alert("Error: " + err.message);
+    }
   }
-}
+
+  async function fetchExamDetail(examId) {
+    setIsLoadingExamDetail(true);
+    setSelectedExam(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/exam/${examId}/info`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setSelectedExam(data.exam || data);
+    } catch (err) {
+      console.error("Failed to load exam info", err);
+    } finally {
+      setIsLoadingExamDetail(false);
+    }
+  }
+
+  async function fetchChunkCount() {
+    try {
+      const res = await fetch(`${API_BASE}/api/documents/citation-stats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setCitationStats(data.chunk_stats || []);
+      // console.log("Citation Stats:", data.chunk_stats);
+      // console.log("Documents:", documents);
+    } catch (err) {
+      console.error("Failed to load document stats", err);
+    }
+  }
   async function handleUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -178,7 +283,139 @@ async function fetchChunkCount() {
     });
   }
 
+  async function rateMessage(index, convId, rating) {
+    if (!convId) return;
+
+    // Optimistic update so the button reflects the click immediately.
+    setMessages((prev) => {
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        rating: updated[index].rating === rating ? null : rating, // click again to un-rate
+      };
+      return updated;
+    });
+
+    try {
+      // TODO: swap in your real rating endpoint (path/method/body) once it exists.
+      await fetch(`${API_BASE}/api/conversations/${convId}/rate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ rating }),
+      });
+    } catch (err) {
+      console.error("Failed to submit rating", err);
+    }
+  }
+
+  async function readAnalytic(question) {
+    try {
+      const res = await fetch(`${API_BASE}/api/instructor/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ question, session_id: sessionId, isNewSession }),
+      });
+      setIsNewSession(false);
+
+      if (!res.ok) {
+        let errorText = "⚠️ Something went wrong. Please try again.";
+        if (res.status === 429) {
+          errorText =
+            "⚠️ Rate limit reached. Please wait a moment and try again.";
+        }
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            content: errorText,
+            isError: true,
+          };
+          return updated;
+        });
+        return;
+      }
+
+      const data = await res.json();
+      const summaryText =
+        `${data.answer}\n\n` +
+        `Intent: ${data.intent}\n\n` +
+        `Confidence: ${(data.confidence * 100).toFixed(0)}%`;
+
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          content: summaryText,
+        };
+        return updated;
+      });
+    } catch (err) {
+      console.error("Analytic fetch error:", err);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          content: "⚠️ Something went wrong. Please try again.",
+          isError: true,
+        };
+        return updated;
+      });
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  async function historyChat(id) {
+    try {
+      setIsNewSession(false);
+      const res = await fetch(`${API_BASE}/api/conversations/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      console.log("History response:", data);
+
+      const chat = data.chat || [];
+
+      setSessionId(id);
+      setSessionChat(chat);
+      setCurrentChatTitle(
+        myConvo.find((c) => c.session_id === id)?.title || "Chat",
+      );
+
+      setMessages(
+        chat.flatMap((doc) => [
+          {
+            role: "user",
+            content: doc.question || "",
+          },
+          {
+            role: "assistant",
+            content: doc.answer || "",
+            convId: doc.id,
+            rating: doc.rating || null,
+          },
+        ]),
+      );
+    } catch (err) {
+      console.error("Failed to load conversation:", err);
+    }
+  }
   async function sendMessage() {
+    console.log("Hello");
     const question = input.trim();
     if (!question || isSending) return;
 
@@ -193,20 +430,48 @@ async function fetchChunkCount() {
     setInput("");
 
     try {
-      const url = examMode ? `exam/chat` : `chat`;
+      let url = `chat`;
+      if (examMode) {
+        url = `exam/chat`;
+      } else if (analyticMode) {
+        await readAnalytic(question);
+        return;
+      }
+
       const response = await fetch(`${API_BASE}/api/${url}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ question: question }),
+        body: JSON.stringify({
+          question: question,
+          session_id: sessionId,
+          isNewSession,
+        }),
       });
+      setIsNewSession(false);
+
+      // Capture the per-message conversation id from the response header
+      // (sent alongside the streamed body, doesn't touch the stream itself)
+      // and attach it to this assistant message before any chunks arrive.
+      const convId = response.headers.get("X-Conversation-Id");
+      if (convId) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            convId,
+          };
+          return updated;
+        });
+      }
 
       if (!response.ok) {
         let errorText = "⚠️ Something went wrong. Please try again.";
         if (response.status === 429) {
-          errorText = "⚠️ Rate limit reached. Please wait a moment and try again.";
+          errorText =
+            "⚠️ Rate limit reached. Please wait a moment and try again.";
         }
 
         setMessages((prev) => {
@@ -257,9 +522,11 @@ async function fetchChunkCount() {
 
   // ---------- Auth gating (after all hooks, per Rules of Hooks) ----------
   if (!token) {
-    return showSignup
-      ? <Signup onSwitchToLogin={() => setShowSignup(false)} />
-      : <Login onSwitchToSignup={() => setShowSignup(true)} />;
+    return showSignup ? (
+      <Signup onSwitchToLogin={() => setShowSignup(false)} />
+    ) : (
+      <Login onSwitchToSignup={() => setShowSignup(true)} />
+    );
   }
 
   return (
@@ -267,53 +534,130 @@ async function fetchChunkCount() {
       {/* ---------- Sidebar ---------- */}
 
       <div className="sidebar">
-        <div className="logo">Exam AI</div>
+        <div className="sidebar-logo">
+          <svg
+            className="bot-icon"
+            width="24"
+            height="24"
+            viewBox="0 0 100 100"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle cx="50" cy="10" r="5" fill="currentColor" />
+            <rect x="47.5" y="15" width="5" height="14" fill="currentColor" />
+            <rect x="24" y="29" width="52" height="46" rx="14" fill="currentColor" />
+            <rect x="14" y="44" width="11" height="18" rx="5.5" fill="currentColor" />
+            <rect x="75" y="44" width="11" height="18" rx="5.5" fill="currentColor" />
+            <circle cx="39" cy="50" r="5" fill="#171717" />
+            <circle cx="61" cy="50" r="5" fill="#171717" />
+            <path
+              d="M36 60 Q50 70 64 60"
+              stroke="#171717"
+              strokeWidth="4"
+              strokeLinecap="round"
+              fill="none"
+            />
+          </svg>
+          <span>Chatbot</span>
+        </div>
 
+        {/* ---------- Sidebar content: single continuous scroll region ---------- */}
         <div className="sidebar-content">
           {role === "admin" && (
-            <div className="docs-section">
-              <div className="docs-section-title">Documents</div>
-              {documents.length === 0 ? (
-                <div className="docs-empty">No documents uploaded yet.</div>
-              ) : (
-                documents.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="doc-sidebar-row"
-                    onClick={() => handlePreviewDoc(doc)}
-                  >
-                    <div className="doc-sidebar-icon">
-                      <FileText size={15} />
-                    </div>
-                    <div className="doc-sidebar-info">
-                      <span className="doc-sidebar-name">{doc.filename}</span>
-                      <span className="doc-sidebar-meta">
-                        {doc.chunk_count} chunks
-                        {citationStats.find((s) => s.document_id === doc.id) &&
-                          ` · cited ${citationStats.find((s) => s.document_id === doc.id).chunk_count}x`}
-                          
-                      </span>
-                    </div>
-                    <button
-                      className="doc-sidebar-delete"
-                      onClick={(e) => handleDeleteDoc(doc.id, e)}
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))
-              )}
+            <div className="admin-panel">
+              <div className="sidebar-nav">
+                <button
+                  className="sidebar-nav-item"
+                  onClick={() => setAdminPanelView("documents")}
+                >
+                  <FileText size={16} />
+                  Documents
+                </button>
+                <button
+                  className="sidebar-nav-item"
+                  onClick={() => setAdminPanelView("chats")}
+                >
+                  <MessageSquare size={16} />
+                  Client Chats
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Chat history placeholder — lower half of sidebar */}
+          {role === "instructor" && (
+            <>
+              <div className="mode-tabs">
+                <button
+                  className={!analyticMode ? "active" : ""}
+                  onClick={() => setAnalyticMode(false)}
+                >
+                  Chat
+                </button>
+                <button
+                  className={analyticMode ? "active" : ""}
+                  onClick={() => setAnalyticMode(true)}
+                >
+                  Analytics
+                </button>
+              </div>
+
+              <div className="sidebar-nav">
+                <button
+                  className="sidebar-nav-item"
+                  onClick={() => setExamListOpen(true)}
+                >
+                  <FileText size={16} />
+                  Exams
+                </button>
+              </div>
+            </>
+          )}
+
+          {!examMode && (
+            <button
+              className="sidebar-nav-item"
+              onClick={() => {
+                handleNewChat();
+              }}
+            >
+              <MessageSquare size={16} />
+              New Chat
+            </button>
+          )}
+
+          {!examMode && (
+            <>
+              <div className="sidebar-section-title">Recents</div>
+              <div className="history-list">
+              {myConvo.length === 0 ? (
+                <div className="empty-state">
+                  <MessageSquare size={14} />
+                  No chat history yet
+                </div>
+              ) : (
+                myConvo.map((doc) => (
+                  <button
+                    key={doc.session_id}
+                    className={`history-item ${sessionId === doc.session_id ? "active" : ""}`}
+                    onClick={() => historyChat(doc.session_id)}
+                    title={doc.title}
+                  >
+                    <MessageSquare size={14} />
+                    {doc.title}
+                  </button>
+                ))
+              )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="sidebar-footer">
           <div className="user-info">
-            <span className="user-role">{role}</span>
-            <button onClick={logout} className="logout-btn">Log out</button>
+            <span className={`user-role ${role}`}>{role}</span>
+            <button onClick={logout} className="logout-btn">
+              Log out
+            </button>
           </div>
         </div>
       </div>
@@ -321,16 +665,19 @@ async function fetchChunkCount() {
       {/* ---------- Main Chat Area ---------- */}
 
       <div className="main">
-       <div className="main-header">
-  <h1>Exam AI Chatbot</h1>
-  {examMode && (
-    <div className="exam-mode-badge">
-      <span className="exam-mode-dot" />
-      Exam Mode
-    </div>
-  )}
-</div>
-        
+        <div className="main-header">
+          <div className="chat-title-label">{currentChatTitle}</div>
+          <h1></h1>
+          {examMode && (
+            <div className="exam-mode-badge">
+              <span className="exam-mode-dot" />
+              Exam Mode
+            </div>
+          )}
+        </div>
+
+        {/* TODO(design): populated empty state (logo + suggested prompts)
+            goes here once messages.length === 0 — left as-is per scope agreement. */}
 
         <div className="chat-wrapper" ref={chatWrapperRef}>
           <div className="content">
@@ -349,8 +696,8 @@ async function fetchChunkCount() {
                       msg.role === "user"
                         ? "user-message"
                         : msg.isError
-                        ? "assistant-message error"
-                        : "assistant-message"
+                          ? "assistant-message error"
+                          : "assistant-message"
                     }
                   >
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -358,13 +705,38 @@ async function fetchChunkCount() {
                     </ReactMarkdown>
                   </div>
 
-                  <button
-                    className="copy-btn"
-                    onClick={() => copyToClipboard(msg.content, index)}
-                    title="Copy"
-                  >
-                    {copiedIndex === index ? <Check size={16} /> : <Copy size={16} />}
-                  </button>
+                  <div className="message-actions">
+                    <button
+                      className="copy-btn"
+                      onClick={() => copyToClipboard(msg.content, index)}
+                      title="Copy"
+                    >
+                      {copiedIndex === index ? (
+                        <Check size={16} />
+                      ) : (
+                        <Copy size={16} />
+                      )}
+                    </button>
+
+                    {msg.role === "assistant" && msg.convId && (
+                      <>
+                        <button
+                          className={`rate-btn rate-up ${msg.rating === "up" ? "active" : ""}`}
+                          onClick={() => rateMessage(index, msg.convId, "up")}
+                          title="Good response"
+                        >
+                          <ThumbsUp size={15} />
+                        </button>
+                        <button
+                          className={`rate-btn rate-down ${msg.rating === "down" ? "active" : ""}`}
+                          onClick={() => rateMessage(index, msg.convId, "down")}
+                          title="Bad response"
+                        >
+                          <ThumbsDown size={15} />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -384,7 +756,11 @@ async function fetchChunkCount() {
                     disabled={isUploading}
                     title="Upload document"
                   >
-                    {isUploading ? <Loader2 size={18} className="spin" /> : <Paperclip size={18} />}
+                    {isUploading ? (
+                      <Loader2 size={18} className="spin" />
+                    ) : (
+                      <Paperclip size={18} />
+                    )}
                   </button>
                   <input
                     type="file"
@@ -411,8 +787,16 @@ async function fetchChunkCount() {
                 }}
               />
 
-              <button onClick={sendMessage} disabled={isSending} className="send-btn">
-                {isSending ? <Loader2 size={20} className="spin" /> : <Send size={20} />}
+              <button
+                onClick={sendMessage}
+                disabled={isSending}
+                className="send-btn"
+              >
+                {isSending ? (
+                  <Loader2 size={20} className="spin" />
+                ) : (
+                  <Send size={20} />
+                )}
               </button>
             </div>
           </div>
@@ -425,8 +809,25 @@ async function fetchChunkCount() {
         <div className="preview-overlay" onClick={() => setPreviewDoc(null)}>
           <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
             <div className="preview-header">
-              <h2>{previewDoc.filename}</h2>
-              <button onClick={() => setPreviewDoc(null)} className="auth-close">
+              <div className="preview-header-left">
+                {adminPanelView === "documents" && (
+                  <button
+                    className="modal-back-btn"
+                    onClick={() => setPreviewDoc(null)}
+                    title="Back"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                )}
+                <h2>{previewDoc.filename}</h2>
+              </div>
+              <button
+                onClick={() => {
+                  setPreviewDoc(null);
+                  setAdminPanelView(null);
+                }}
+                className="auth-close"
+              >
                 <X size={20} />
               </button>
             </div>
@@ -439,12 +840,370 @@ async function fetchChunkCount() {
               <div className="chunk-list">
                 {previewChunks.map((chunk) => (
                   <div key={chunk.chunk_index} className="chunk-item">
-                    <span className="chunk-index">Chunk {chunk.chunk_index}</span>
+                    <span className="chunk-index">
+                      Chunk {chunk.chunk_index}
+                    </span>
                     <p>{chunk.content}</p>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Exams list modal (instructor only) ---------- */}
+
+      {examListOpen && !examDetailOpen && (
+        <div className="preview-overlay" onClick={() => setExamListOpen(false)}>
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <h2>Exams</h2>
+              <button
+                onClick={() => setExamListOpen(false)}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {fetchExams.length === 0 ? (
+              <div className="docs-empty">No exams yet.</div>
+            ) : (
+              <div className="doc-list">
+                {fetchExams.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="doc-sidebar-row"
+                    onClick={() => {
+                      setExamDetailOpen(true);
+                      fetchExamDetail(doc.id);
+                    }}
+                  >
+                    <div className="doc-sidebar-icon">
+                      <FileText size={15} />
+                    </div>
+                    <div className="doc-sidebar-info">
+                      <span className="doc-sidebar-name">{doc.title}</span>
+                      <span className="doc-sidebar-meta">
+                        <span className={`status-pill ${doc.status}`}>
+                          {doc.status}
+                        </span>
+                        {doc.id}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Exam detail modal (instructor only) ---------- */}
+
+      {examDetailOpen && (
+        <div
+          className="preview-overlay"
+          onClick={() => {
+            setExamDetailOpen(false);
+            setSelectedExam(null);
+          }}
+        >
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <div className="preview-header-left">
+                <button
+                  className="modal-back-btn"
+                  onClick={() => {
+                    setExamDetailOpen(false);
+                    setSelectedExam(null);
+                  }}
+                  title="Back"
+                >
+                  <ArrowLeft size={18} />
+                </button>
+                <h2>{selectedExam ? selectedExam.title : "Exam Detail"}</h2>
+              </div>
+              <button
+                onClick={() => {
+                  setExamDetailOpen(false);
+                  setSelectedExam(null);
+                  setExamListOpen(false);
+                }}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {isLoadingExamDetail ? (
+              <div className="admin-loading">
+                <Loader2 className="spin" size={20} /> Loading exam...
+              </div>
+            ) : selectedExam ? (
+              <div className="chat-detail-fields">
+                {Object.entries(selectedExam).map(([key, value]) => (
+                  <div key={key} className="chat-detail-row">
+                    <span className="chat-detail-label">
+                      {key.replace(/_/g, " ")}
+                    </span>
+                    <span className="chat-detail-value">
+                      {value === null || value === undefined
+                        ? "—"
+                        : typeof value === "object"
+                          ? JSON.stringify(value)
+                          : String(value)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="docs-empty">Couldn't load exam details.</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Documents list modal (admin only) ---------- */}
+
+      {adminPanelView === "documents" && !previewDoc && (
+        <div
+          className="preview-overlay"
+          onClick={() => setAdminPanelView(null)}
+        >
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <h2>Documents</h2>
+              <button
+                onClick={() => setAdminPanelView(null)}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {documents.length === 0 ? (
+              <div className="docs-empty">No documents uploaded yet.</div>
+            ) : (
+              <div className="doc-list">
+                {documents.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="doc-sidebar-row"
+                    onClick={() => handlePreviewDoc(doc)}
+                  >
+                    <div className="doc-sidebar-icon">
+                      <FileText size={15} />
+                    </div>
+                    <div className="doc-sidebar-info">
+                      <span className="doc-sidebar-name">{doc.filename}</span>
+                      <span className="doc-sidebar-meta">
+                        {doc.chunk_count} chunks
+                        {citationStats.find((s) => s.document_id === doc.id) &&
+                          ` · cited ${citationStats.find((s) => s.document_id === doc.id).chunk_count}x`}
+                      </span>
+                    </div>
+                    <button
+                      className="doc-sidebar-delete"
+                      onClick={(e) => handleDeleteDoc(doc.id, e)}
+                      title="Delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Client Chats modal: filters + results (admin only) ---------- */}
+
+      {adminPanelView === "chats" && !selectedChatDetail && (
+        <div
+          className="preview-overlay"
+          onClick={() => setAdminPanelView(null)}
+        >
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <h2>Client Chats</h2>
+              <button
+                onClick={() => setAdminPanelView(null)}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="filter-groups">
+              <div className="filter-group">
+                <div className="filter-group-title">Role</div>
+                <div className="filter-chips">
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={roleFilter === "admin"}
+                      onChange={(e) => setRoleFilter(e.target.checked ? "admin" : "")}
+                    />
+                    Admin
+                  </label>
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={roleFilter === "student"}
+                      onChange={(e) => setRoleFilter(e.target.checked ? "student" : "")}
+                    />
+                    Student
+                  </label>
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={roleFilter === "instructor"}
+                      onChange={(e) => setRoleFilter(e.target.checked ? "instructor" : "")}
+                    />
+                    Instructor
+                  </label>
+                </div>
+              </div>
+
+              <div className="filter-group">
+                <div className="filter-group-title">Mode</div>
+                <div className="filter-chips">
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={modeFilter === "general"}
+                      onChange={(e) => setModeFilter(e.target.checked ? "general" : "")}
+                    />
+                    General
+                  </label>
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={modeFilter === "exam"}
+                      onChange={(e) => setModeFilter(e.target.checked ? "exam" : "")}
+                    />
+                    Exam
+                  </label>
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={modeFilter === "instructor"}
+                      onChange={(e) => setModeFilter(e.target.checked ? "instructor" : "")}
+                    />
+                    Analysis
+                  </label>
+                </div>
+              </div>
+
+              <div className="filter-group">
+                <div className="filter-group-title">Response</div>
+                <div className="filter-chips">
+                  <label className="chip">
+                    <input
+                      type="checkbox"
+                      checked={escalatedFilter === true}
+                      onChange={(e) => setEscalatedFilter(e.target.checked ? true : null)}
+                    />
+                    Escalated
+                  </label>
+                </div>
+              </div>
+
+              <div className="filter-group">
+                <div className="filter-group-title">User</div>
+                <div className="filter-search-input">
+                  <Search size={14} />
+                  <input
+                    type="text"
+                    placeholder="Enter Reg no."
+                    value={userIdFilter}
+                    onChange={(e) => setUserIdFilter(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <button
+              className="filter-search-btn full-width"
+              onClick={() => adminSearchChat()}
+            >
+              <Search size={13} />
+              Search
+            </button>
+
+            <div className="client-chats-results">
+              {searchChat.length === 0 ? (
+                <div className="empty-state">
+                  <MessageSquare size={14} />
+                  No chat history found
+                </div>
+              ) : (
+                searchChat.map((doc, i) => (
+                  <button
+                    key={i}
+                    className="filter-result-item"
+                    onClick={() => setSelectedChatDetail(doc)}
+                  >
+                    {doc.question_preview || doc.question || `Conversation ${i + 1}`}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Client chat detail modal (admin only) ---------- */}
+
+      {selectedChatDetail && (
+        <div
+          className="preview-overlay"
+          onClick={() => setSelectedChatDetail(null)}
+        >
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <div className="preview-header-left">
+                {adminPanelView === "chats" && (
+                  <button
+                    className="modal-back-btn"
+                    onClick={() => setSelectedChatDetail(null)}
+                    title="Back"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                )}
+                <h2>Conversation Detail</h2>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedChatDetail(null);
+                  setAdminPanelView(null);
+                }}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="chat-detail-fields">
+              {Object.entries(selectedChatDetail).map(([key, value]) => (
+                <div key={key} className="chat-detail-row">
+                  <span className="chat-detail-label">
+                    {key.replace(/_/g, " ")}
+                  </span>
+                  <span className="chat-detail-value">
+                    {value === null || value === undefined
+                      ? "—"
+                      : typeof value === "object"
+                        ? JSON.stringify(value)
+                        : String(value)}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
