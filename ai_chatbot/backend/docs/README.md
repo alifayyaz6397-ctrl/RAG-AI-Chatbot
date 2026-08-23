@@ -18,9 +18,8 @@ python -m uvicorn main:app --reload --port 8000
 
 Interactive API docs at `http://127.0.0.1:8000/docs`.
 
-> The checked-in `venv/` is missing `pyjwt`, `bcrypt` and `python-multipart`,
-> so the app does not start with it. Install `requirements.txt` into a fresh
-> environment, or use a system Python that already has them.
+Dependencies are declared in [`../requirements.txt`](../requirements.txt)
+(`pip install -r ../requirements.txt`).
 
 ## Environment
 

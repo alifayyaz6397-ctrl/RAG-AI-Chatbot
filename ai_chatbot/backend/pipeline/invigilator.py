@@ -3,14 +3,10 @@ import json
 from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
-<<<<<<< HEAD
 import llm
-=======
-from generation import create_conversation_id
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
 
 load_dotenv()
-conv_id=create_conversation_id();
+
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 INVIGILATOR_SYSTEM_PROMPT = """You are the Virtual Invigilator for an active exam session.
@@ -210,20 +206,19 @@ def classify_message(question: str) -> str:
     return "OTHER"
 
 
-<<<<<<< HEAD
-def generate_invigilator_answer(question: str, chunks: list[dict], user, persist: bool = True):
+def generate_invigilator_answer(question: str, chunks: list[dict], user,
+                                session_id: str | None = None,
+                                persist: bool = True):
     """persist=False runs the identical guard path but writes no conversation
     or escalation rows -- the red-team evaluation harness uses it so a
     benchmark run does not fill the escalation queue with synthetic incidents.
 
-    Yields (type, value) tuples: ('text', str) is visible answer content;
-=======
-def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dict], user):
-    """Yields (type, value) tuples: ('text', str) is visible answer content;
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
-    ('event', dict) is metadata your route should send as a SEPARATE event,
-    never concatenated into the displayed message -- that's what caused the
-    __EVENT__{...} string to leak into the student-visible answer before."""
+    session_id groups the turns of one exam chat together for the history
+    view; it is optional so the harness can call this without one.
+
+    Yields the visible answer text. Escalation metadata is never concatenated
+    into what is yielded -- that's what caused the __EVENT__{...} string to
+    leak into the student-visible answer before."""
     REFUSAL = "I can only help with exam rules and technical issues during this exam. Please continue with your exam."
 
     category = classify_message(question)
@@ -234,13 +229,9 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
         answer = ("This may need immediate attention. Please talk to your "
                    "invigilator directly and in person right now -- don't "
                    "wait for a response here.")
-<<<<<<< HEAD
         _record_escalation(question, user, reason="medical", persist=persist)
-        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
-=======
-        _record_escalation(question, user, reason="medical")
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -252,11 +243,8 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
         answer = ("I've logged this for your exam supervisor to review. "
                    "Soon he will contact you. "
                    "Continue your exam.")
-<<<<<<< HEAD
-        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
-=======
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -265,25 +253,19 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
     # that a person has already been notified live.
     if category == "TECHNICAL":
         _record_escalation(question, user, reason="technical_issue", persist=persist)
-        answer = ("I've logged this issue for your exam supervisor to "
+        answer = ("I've logged this issue for your exam supervisor to review. "
                     "Soon he will contact you. "
                     "Continue your exam.")
-<<<<<<< HEAD
-        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
-=======
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
     # Layer 1: no context at all -> refuse without calling the model
     if not chunks:
         answer = REFUSAL
-<<<<<<< HEAD
-        _save_conversation(question, answer, chunks, user, escalate=False, persist=persist)
-=======
-        _save_conversation(question, answer, chunks, user,session_id, escalate=False)
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=False, persist=persist)
         yield (answer)
         return
 
@@ -305,7 +287,8 @@ Answer:
         draft_answer = llm.generate(prompt)
     except llm.ModelUnavailable:
         answer = REFUSAL
-        _save_conversation(question, answer, chunks, user, escalate=False, persist=persist)
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=False, persist=persist)
         yield (answer)
         return
 
@@ -323,21 +306,14 @@ Answer:
         for i in range(0, len(answer), 20):
             yield (answer[i:i + 20])
 
-<<<<<<< HEAD
-    _save_conversation(question, answer, chunks, user, escalate=content_unsafe, persist=persist)
+    _save_conversation(question, answer, chunks, user, session_id,
+                       escalate=content_unsafe, persist=persist)
 
 
-
-def _save_conversation(question, answer, chunks, user, escalate, persist: bool = True):
+def _save_conversation(question, answer, chunks, user, session_id, escalate,
+                       persist: bool = True):
     if not persist:
         return
-=======
-    _save_conversation(question, answer, chunks, user,session_id, escalate=content_unsafe)
-
-
-
-def _save_conversation(question, answer, chunks, user,session_id, escalate):
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
@@ -347,9 +323,10 @@ def _save_conversation(question, answer, chunks, user,session_id, escalate):
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode, escalated,session_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s,%s)""",
-            (conv_id,user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"], "exam", escalate,session_id)
+            """INSERT INTO conversations (user_id, role, messages, tenant_id, mode, escalated, session_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (user["linked_id"], user["role"], json.dumps(messages),
+             user["tenant_id"], "exam", escalate, session_id)
         )
         conn.commit()
         cur.close()

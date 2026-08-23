@@ -25,7 +25,7 @@ function AdminPanel() {
       });
       const data = await res.json();
       setDocuments(data.documents || []);
-    } catch (err) {
+    } catch {
       setError("Could not load documents.");
     } finally {
       setIsLoadingList(false);
@@ -61,7 +61,7 @@ function AdminPanel() {
       }
 
       await fetchDocuments();
-    } catch (err) {
+    } catch {
       setError("Could not reach the server.");
     } finally {
       setIsUploading(false);
@@ -85,7 +85,7 @@ function AdminPanel() {
       }
 
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
-    } catch (err) {
+    } catch {
       setError("Could not reach the server.");
     }
   }
@@ -101,7 +101,7 @@ function AdminPanel() {
       });
       const data = await res.json();
       setPreviewChunks(data.chunks || []);
-    } catch (err) {
+    } catch {
       setError("Could not load chunk preview.");
     } finally {
       setIsLoadingPreview(false);

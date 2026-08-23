@@ -10,7 +10,6 @@ import shutil
 import os
 from pdf_parser import extract_text_from_pdf
 from chunking import chunk_text
-from generation import create_conversation_id
 from embedding import embed_text
 from storage import get_connection
 from Auth import router as auth_router, verify_token
@@ -24,7 +23,6 @@ import feedback
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    expose_headers=["X-Conversation-Id"],
     allow_origins=[
         "http://localhost:5173",
     ],
@@ -86,8 +84,9 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         student_ctx = get_student_context(user["linked_id"])
 
     chunks = retrieve_chunks(request.question)
-<<<<<<< HEAD
-    result = build_answer(request.question, chunks, user, student_ctx)
+    result = build_answer(request.question, chunks, user, student_ctx,
+                          session_id=request.session_id,
+                          is_new_session=request.isNewSession)
 
     # The escalation decision travels in headers, never in the body. The
     # frontend reads this response as a raw text stream, so anything merged
@@ -104,14 +103,6 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         stream_text(result["answer"]),
         media_type="text/plain",
         headers=headers,
-=======
-    # print (chunks)      //print retreived chunks
-    conv_id=create_conversation_id()
-    return StreamingResponse(
-        generate_answer(request.question, chunks, user,request.session_id,request.isNewSession ,conv_id,student_ctx),
-        media_type="text/plain",
-        headers={"X-Conversation-Id":conv_id},
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
     )
 
 
@@ -350,7 +341,8 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
-    answer= generate_invigilator_answer(request.question,request.session_id, user, chunks)
+    answer = generate_invigilator_answer(request.question, chunks, user,
+                                         session_id=request.session_id)
     return StreamingResponse(answer,media_type="plain/text")
 
 

@@ -143,7 +143,6 @@ def list_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
                 LIMIT %(limit)s OFFSET %(offset)s""",
             params,
         )
-        {where}
         rows = cur.fetchall()
      
         cur.close()
@@ -305,7 +304,7 @@ def store_rating(rating, conv_id):
         )
         conn.commit()
         cur.close()
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
     finally:

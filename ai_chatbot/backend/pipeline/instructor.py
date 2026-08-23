@@ -1,6 +1,3 @@
-from generation import create_conversation_id
-
-conv_id=create_conversation_id()
 """
 instructor.py -- natural language -> analytics for /api/instructor/chat.
 
@@ -17,7 +14,6 @@ If stage 1 isn't confident enough, we stop there and say so rather than
 guessing at a report.
 """
 
-import os
 import json
 from datetime import date
 
@@ -38,12 +34,9 @@ ModelUnavailable = llm.ModelUnavailable
 def _generate(prompt: str, config: dict | None = None) -> str:
     return llm.generate(prompt, config=config)
 
-<<<<<<< HEAD
-=======
 # Self-reported confidence is a soft signal, not a probability -- it is used
 # only to separate "clearly one of our four reports" from "no idea".
 CONFIDENCE_THRESHOLD = 0
->>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
 
 FALLBACK_ANSWER = (
     "I couldn't map that to a report. I can answer questions about: "
@@ -347,10 +340,10 @@ def _save_conversation(session_id,question, answer, user, intent, confidence, re
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode,session_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (conv_id,user["linked_id"], user["role"], json.dumps(messages, default=str),
-             user["tenant_id"], "instructor",session_id)
+            """INSERT INTO conversations (user_id, role, messages, tenant_id, mode, session_id)
+               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+            (user["linked_id"], user["role"], json.dumps(messages, default=str),
+             user["tenant_id"], "instructor", session_id)
         )
         conversation_id = cur.fetchone()[0]
         conn.commit()

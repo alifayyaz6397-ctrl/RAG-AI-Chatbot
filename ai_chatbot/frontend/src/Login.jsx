@@ -31,7 +31,7 @@ function Login({ onSwitchToSignup }) {
       }
 
       login(data.access_token, data.role);
-    } catch (err) {
+    } catch {
       setError("Could not reach the server. Please try again.");
     } finally {
       setIsLoading(false);

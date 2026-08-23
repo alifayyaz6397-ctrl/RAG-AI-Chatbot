@@ -14,7 +14,6 @@ import {
   Trash2,
   X,
   FileText,
-  Summary,
   MessageSquare,
   Search,
   ArrowLeft,
@@ -49,8 +48,8 @@ function App() {
   const [analyticMode, setAnalyticMode] = useState(false);
   const [fetchExams, setFetchExams] = useState([]);
   const [myConvo, setMyConvo] = useState([]);
+  const [, setSessionChat] = useState([]);
   const [sessionId, setSessionId] = useState(null);
-  const [sessionChat, setSessionChat] = useState([]);
   const [isNewSession, setIsNewSession] = useState(false);
   const [searchChat, setSearchChat] = useState([]);
   const [roleFilter, setRoleFilter] = useState("");
@@ -180,8 +179,8 @@ function App() {
       const data = await res.json();
       // alert("Response: " + JSON.stringify(data));
       setFetchExams(data.exams || []);
-    } catch (err) {
-      // alert("Error: " + err.message);
+    } catch {
+      // intentionally silent: the aborted-stream case is not user-facing
     }
   }
 

@@ -28,7 +28,6 @@ both generators are called with persist=False.
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 import time
