@@ -3,6 +3,7 @@ import json
 from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
+import llm
 
 load_dotenv()
 
@@ -171,33 +172,46 @@ Respond with exactly one word: TECHNICAL, MEDICAL, ACCOMMODATION, or OTHER.
 
 
 def guard_check(question: str, answer: str) -> bool:
-    """Returns True if the answer is safe to show the student."""
+    """Returns True if the answer is safe to show the student.
+
+    Fails CLOSED. If Gemini cannot be reached the answer has not been cleared,
+    and an uncleared answer during a live exam is refused rather than shown --
+    the whole point of the guard is that nothing reaches the student unverified.
+    """
     prompt = GUARD_PROMPT.format(question=question, answer=answer)
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt
-    )
-    verdict = response.text.strip().upper()
+    try:
+        verdict = llm.generate(prompt).strip().upper()
+    except llm.ModelUnavailable:
+        print("[GUARD: UNAVAILABLE] failing closed")
+        return False
     return verdict.startswith("SAFE")
 
 
 def classify_message(question: str) -> str:
     """Routes the student's message using the 4-way ROUTING_PROMPT.
-    Returns 'TECHNICAL', 'MEDICAL', 'ACCOMMODATION', or 'OTHER'."""
+    Returns 'TECHNICAL', 'MEDICAL', 'ACCOMMODATION', or 'OTHER'.
+
+    Falls back to OTHER when the model is unreachable: OTHER is the branch
+    that goes on to retrieval plus the guard, so an unroutable message still
+    ends up somewhere safe instead of failing the request.
+    """
     prompt = ROUTING_PROMPT.format(question=question)
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt
-    )
-    verdict = response.text.strip().upper()
+    try:
+        verdict = llm.generate(prompt).strip().upper()
+    except llm.ModelUnavailable:
+        return "OTHER"
     for category in ("TECHNICAL", "MEDICAL", "ACCOMMODATION"):
         if verdict.startswith(category):
             return category
     return "OTHER"
 
 
-def generate_invigilator_answer(question: str, chunks: list[dict], user):
-    """Yields (type, value) tuples: ('text', str) is visible answer content;
+def generate_invigilator_answer(question: str, chunks: list[dict], user, persist: bool = True):
+    """persist=False runs the identical guard path but writes no conversation
+    or escalation rows -- the red-team evaluation harness uses it so a
+    benchmark run does not fill the escalation queue with synthetic incidents.
+
+    Yields (type, value) tuples: ('text', str) is visible answer content;
     ('event', dict) is metadata your route should send as a SEPARATE event,
     never concatenated into the displayed message -- that's what caused the
     __EVENT__{...} string to leak into the student-visible answer before."""
@@ -211,8 +225,8 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
         answer = ("This may need immediate attention. Please talk to your "
                    "invigilator directly and in person right now -- don't "
                    "wait for a response here.")
-        _record_escalation(question, user, reason="medical")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _record_escalation(question, user, reason="medical", persist=persist)
+        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -220,11 +234,11 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
     # into the generic technical queue even when the symptom sounds
     # technical ("isn't showing on screen"). DB record only, no webhook.
     if category == "ACCOMMODATION":
-        _record_escalation(question, user, reason="accommodation")
+        _record_escalation(question, user, reason="accommodation", persist=persist)
         answer = ("I've logged this for your exam supervisor to review. "
                    "Soon he will contact you. "
                    "Continue your exam.")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -232,18 +246,18 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user):
     # only claims what actually happened: it was logged for review, not
     # that a person has already been notified live.
     if category == "TECHNICAL":
-        _record_escalation(question, user, reason="technical_issue")
+        _record_escalation(question, user, reason="technical_issue", persist=persist)
         answer = ("I've logged this issue for your exam supervisor to "
                     "Soon he will contact you. "
                     "Continue your exam.")
-        _save_conversation(question, answer, chunks, user, escalate=True)
+        _save_conversation(question, answer, chunks, user, escalate=True, persist=persist)
         yield (answer)
         return
 
     # Layer 1: no context at all -> refuse without calling the model
     if not chunks:
         answer = REFUSAL
-        _save_conversation(question, answer, chunks, user, escalate=False)
+        _save_conversation(question, answer, chunks, user, escalate=False, persist=persist)
         yield (answer)
         return
 
@@ -258,14 +272,16 @@ Student question:
 Answer:
 """
 
-    response = client.models.generate_content_stream(model="gemini-3.5-flash", contents=prompt)
-
-    draft_chunks = []
-    for chunk in response:
-        if chunk.text:
-            draft_chunks.append(chunk.text)
-
-    draft_answer = "".join(draft_chunks)
+    # Not streamed: the draft is buffered anyway so the guard can inspect the
+    # finished answer before any of it reaches the student. Going through
+    # llm.generate() adds the retry the streaming call never had.
+    try:
+        draft_answer = llm.generate(prompt)
+    except llm.ModelUnavailable:
+        answer = REFUSAL
+        _save_conversation(question, answer, chunks, user, escalate=False, persist=persist)
+        yield (answer)
+        return
 
     # Single guard check on the complete answer -- one API call instead of
     # several, and nothing reaches the client until it's cleared.
@@ -281,11 +297,13 @@ Answer:
         for i in range(0, len(answer), 20):
             yield (answer[i:i + 20])
 
-    _save_conversation(question, answer, chunks, user, escalate=content_unsafe)
+    _save_conversation(question, answer, chunks, user, escalate=content_unsafe, persist=persist)
 
 
 
-def _save_conversation(question, answer, chunks, user, escalate):
+def _save_conversation(question, answer, chunks, user, escalate, persist: bool = True):
+    if not persist:
+        return
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
@@ -305,12 +323,14 @@ def _save_conversation(question, answer, chunks, user, escalate):
         conn.close()
 
 
-def _record_escalation(question, user, reason: str):
+def _record_escalation(question, user, reason: str, persist: bool = True):
     """Writes a real, queryable escalation row -- DB insert only, no
     webhook/notification call. Runs before the student is told anything,
     so any confirmation message is backed by an actual record. `reason`
     distinguishes technical_issue / medical / accommodation in the
     dashboard so they don't blur into one undifferentiated queue."""
+    if not persist:
+        return None
     conn = get_connection()
     try:
         cur = conn.cursor()

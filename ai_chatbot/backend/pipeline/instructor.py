@@ -16,57 +16,25 @@ guessing at a report.
 
 import os
 import json
-import time
 from datetime import date
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import errors as genai_errors
-
 from storage import get_connection
+import llm
 import analytics
 from analytics import AnalyticsError, Scope
 
 load_dotenv()
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+MODEL = llm.MODEL
 
-# Overridable because the free tier caps each model at 20 requests/day --
-# switching models is the usual way out of a quota wall.
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
-
-# Two model calls per question means twice the exposure to a transient 503 or
-# a rate limit, and the flash models do return those under load.
-MODEL_ATTEMPTS = 3
-MODEL_BACKOFF_SECONDS = 1.5
-
-
-class ModelUnavailable(Exception):
-    """Gemini could not be reached after retrying."""
+# Retry/backoff lives in llm.py so every caller behaves the same way.
+ModelUnavailable = llm.ModelUnavailable
 
 
 def _generate(prompt: str, config: dict | None = None) -> str:
-    """Every model call goes through here so retry behaviour is uniform."""
-    last_error = None
-    for attempt in range(MODEL_ATTEMPTS):
-        try:
-            response = client.models.generate_content(
-                model=MODEL, contents=prompt, config=config
-            )
-            return response.text or ""
-        except (genai_errors.ServerError, genai_errors.ClientError) as exc:
-            # 429/5xx are worth another try; a malformed request never will be.
-            status = getattr(exc, "code", None)
-            if status is not None and status < 500 and status != 429:
-                raise
-            last_error = exc
-            if attempt < MODEL_ATTEMPTS - 1:
-                time.sleep(MODEL_BACKOFF_SECONDS * (2 ** attempt))
-    raise ModelUnavailable(str(last_error))
+    return llm.generate(prompt, config=config)
 
-# Self-reported confidence is a soft signal, not a probability -- it is used
-# only to separate "clearly one of our four reports" from "no idea".
-CONFIDENCE_THRESHOLD = 0.6
 
 FALLBACK_ANSWER = (
     "I couldn't map that to a report. I can answer questions about: "

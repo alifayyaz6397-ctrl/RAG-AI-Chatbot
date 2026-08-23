@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
-from generation import generate_answer
+from generation import build_answer, stream_text
 from students import get_student_context
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,6 +17,7 @@ from retrieval import retrieve_exam_chunks
 from instructor import answer_instructor_question, ModelUnavailable
 from analytics import AnalyticsError, Scope, list_owned_exams
 import conversations as conversation_store
+import feedback
 
 app = FastAPI()
 app.add_middleware(
@@ -27,6 +28,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Custom response headers are invisible to browser JS unless they are
+    # explicitly exposed -- without this the frontend cannot read the
+    # escalation flag even though it is being sent.
+    expose_headers=[
+        "X-Escalation-Offered",
+        "X-Confidence",
+        "X-Conversation-Id",
+        "X-Ticket-Id",
+    ],
 )
 
 # Signup / login / /me routes now live in auth.py
@@ -48,10 +58,23 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         student_ctx = get_student_context(user["linked_id"])
 
     chunks = retrieve_chunks(request.question)
-    # print (chunks)      //print retreived chunks
+    result = build_answer(request.question, chunks, user, student_ctx)
+
+    # The escalation decision travels in headers, never in the body. The
+    # frontend reads this response as a raw text stream, so anything merged
+    # into the body would render as visible text in the student's chat.
+    headers = {
+        "X-Escalation-Offered": str(result["escalation_offered"]).lower(),
+        "X-Confidence": str(result["top_similarity"]),
+        "X-Conversation-Id": result["conversation_id"],
+    }
+    if result["ticket_id"]:
+        headers["X-Ticket-Id"] = result["ticket_id"]
+
     return StreamingResponse(
-        generate_answer(request.question, chunks, user, student_ctx),
-        media_type="text/plain"
+        stream_text(result["answer"]),
+        media_type="text/plain",
+        headers=headers,
     )
 
 
@@ -368,6 +391,42 @@ async def get_conversation(conversation_id: str, user=Depends(verify_token)):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
+
+
+# ---------------------------------------------------------
+# Message feedback
+# ---------------------------------------------------------
+
+class FeedbackRequest(BaseModel):
+    message_id: str          # "<conversation_id>:<message_index>", e.g. "conv-140:1"
+    rating: str              # "up" | "down"
+    comment: str | None = None
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: FeedbackRequest, user=Depends(verify_token)):
+    try:
+        return feedback.submit_feedback(
+            user, request.message_id, request.rating, request.comment
+        )
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/admin/feedback")
+async def feedback_review_queue(
+    rating: str = Query("down", description="down | up"),
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(verify_token),
+):
+    """Admin review queue: low-rated answers rolled up by cited chunk and by
+    source document, so a weak KB doc is visible rather than inferred."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view the feedback queue")
+    try:
+        return feedback.review_queue(user, rating=rating, limit=limit)
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/me")
