@@ -59,16 +59,32 @@ def _clamp_paging(page: int, page_size: int) -> tuple[int, int, int]:
 # the first user turn, truncated, so a list of 100 conversations stays small.
 # jsonb_array_elements() errors on a non-array, so both the count and the
 # preview are guarded -- one malformed row should not break the whole page.
+  # c.id, c.user_id, c.role, c.mode, c.rating, c.escalated, c.created_at,
+    # CASE WHEN jsonb_typeof(c.messages) = 'array'
+    #      THEN jsonb_array_length(c.messages) ELSE 0 END AS message_count,
+    # CASE WHEN jsonb_typeof(c.messages) = 'array'
+    #      THEN LEFT((SELECT m ->> 'content'
+    #                 FROM jsonb_array_elements(c.messages) m
+    #                 WHERE m ->> 'role' = 'user' AND m->> 'role' = 'assistant'
+    #                 LIMIT 1), 200)
+    # END AS preview
 _SUMMARY_COLUMNS = """
-    c.id, c.user_id, c.role, c.mode, c.rating, c.escalated, c.created_at,
-    CASE WHEN jsonb_typeof(c.messages) = 'array'
-         THEN jsonb_array_length(c.messages) ELSE 0 END AS message_count,
-    CASE WHEN jsonb_typeof(c.messages) = 'array'
-         THEN LEFT((SELECT m ->> 'content'
-                    FROM jsonb_array_elements(c.messages) m
-                    WHERE m ->> 'role' = 'user'
-                    LIMIT 1), 200)
-    END AS preview
+    c.id, c.user_id, c.role, c.mode, c.rating, c.escalated, c.created_at,c.session_id,
+  CASE WHEN jsonb_typeof(c.messages) = 'array'
+       THEN jsonb_array_length(c.messages) ELSE 0 END AS message_count,
+  CASE WHEN jsonb_typeof(c.messages) = 'array'
+       THEN LEFT((SELECT m ->> 'content'
+                  FROM jsonb_array_elements(c.messages) m
+                  WHERE m ->> 'role' = 'user'
+                  LIMIT 1), 200)
+  END AS question_preview,
+  CASE WHEN jsonb_typeof(c.messages) = 'array'
+       THEN LEFT((SELECT m ->> 'content'
+                  FROM jsonb_array_elements(c.messages) m
+                  WHERE m ->> 'role' = 'assistant'
+                  LIMIT 1), 200)
+  END AS answer_preview
+
 """
 
 
@@ -81,8 +97,9 @@ def _summary_row(r) -> dict:
         "rating": r[4],
         "escalated": r[5],
         "created_at": r[6].isoformat() if r[6] else None,
-        "message_count": r[7],
-        "preview": r[8],
+        "message_count": r[8],
+        "question_preview": r[9],
+        "answer_preview": r[10],
     }
 
 
@@ -97,6 +114,7 @@ def list_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
         "limit": page_size,
         "offset": offset,
     }
+    
     where = """
         WHERE c.user_id = %(user_id)s
           AND c.tenant_id = %(tenant_id)s
@@ -108,29 +126,70 @@ def list_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
         cur = conn.cursor()
         cur.execute(f"SELECT COUNT(*) FROM conversations c {where}", params)
         total = cur.fetchone()[0]
+        
+        import math
+        max_page = max(1, math.ceil(total / page_size)) if total else 1
+        if page > max_page:
+            page = max_page
+            offset = (page - 1) * page_size
+            params["offset"] = offset
+
         cur.execute(
-            f"""SELECT {_SUMMARY_COLUMNS}
+            f"""SELECT {_SUMMARY_COLUMNS},s.title
                 FROM conversations c
+                Left join session_titles s on c.session_id=s.session_id
                 {where}
                 ORDER BY c.created_at DESC NULLS LAST, c.id DESC
                 LIMIT %(limit)s OFFSET %(offset)s""",
             params,
         )
+        {where}
         rows = cur.fetchall()
+     
         cur.close()
+        
+        sessions = {}
+        for row in rows:
+            sid = row[7]
+
+            if sid not in sessions:
+                sessions[sid] = {
+                    "session_id": sid,
+                    "title": row[11],
+                    "started_at": row[6],
+                    "user_id": row[1],
+                    "role": row[2],
+                    "conversations": [],
+                }
+
+            
+
+            sessions[sid]["conversations"].append({
+                "id": row[0],
+                "mode": row[3],
+                "rating": row[4],
+                "escalated": row[5],
+                "created_at": row[6],
+                "question": row[9],
+                "answer": row[10]
+            })
+        for s in sessions.values():
+                s["conversations"].sort(key=lambda c: c["created_at"],reverse=True)
+                s["message_count"] = len(s["conversations"])
+                s["started_at"] = s["conversations"][0]["created_at"]
+                
+            # order sessions newest-first (matches the row query's ORDER BY),
+            # then relabel outer keys as "session 1", "session 2", ...
+        
+        result = list(sessions.values())
+     
     finally:
-        conn.close()
+            conn.close()
 
-    return {
-        "conversations": [_summary_row(r) for r in rows],
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-        "has_more": offset + len(rows) < total,
-    }
+    return result;
 
 
-def get_conversation(user, conversation_id: str) -> dict | None:
+def get_conversation(user, session_id: str) -> dict | None:
     """One conversation with its full message list. Returns None when the
     conversation does not exist OR belongs to somebody else -- the caller turns
     both into the same 404 so this can't be used to probe for valid ids.
@@ -141,46 +200,44 @@ def get_conversation(user, conversation_id: str) -> dict | None:
     try:
         cur = conn.cursor()
         cur.execute(
-            """SELECT id, user_id, role, mode, rating, escalated, created_at,
-                      tenant_id, messages
-               FROM conversations
-               WHERE id = %s""",
-            (conversation_id,),
-        )
-        row = cur.fetchone()
+            
+    """SELECT c.id,c.created_at,
+              CASE WHEN jsonb_typeof(c.messages) = 'array'
+                   THEN (SELECT m ->> 'content'
+                         FROM jsonb_array_elements(c.messages) m
+                         WHERE m ->> 'role' = 'user'
+                         LIMIT 1)
+              END AS question_preview,
+              CASE WHEN jsonb_typeof(c.messages) = 'array'
+                   THEN (SELECT m ->> 'content'
+                         FROM jsonb_array_elements(c.messages) m
+                         WHERE m ->> 'role' = 'assistant'
+                         LIMIT 1)
+              END AS answer_preview
+       FROM conversations c
+       WHERE c.session_id = %s
+       ORDER BY c.created_at ASC""",
+    (session_id,),
+)
+        rows = cur.fetchall()
         cur.close()
     finally:
         conn.close()
 
-    if row is None:
-        return None
-
-    (conv_id, user_id, role, mode, rating, escalated,
-     created_at, tenant_id, messages) = row
-
-    if tenant_id != user["tenant_id"]:
-        return None
-    if user["role"] != "admin" and user_id != user["linked_id"]:
-        return None
-
-    normalised = _normalise_messages(messages)
-    all_chunk_ids = [
-        chunk_id
-        for message in normalised
-        for chunk_id in message["retrieved_chunk_ids"]
-    ]
-
-    return {
-        "id": conv_id,
-        "user_id": user_id,
-        "role": role,
-        "mode": mode,
-        "rating": rating,
-        "escalated": escalated,
-        "created_at": created_at.isoformat() if created_at else None,
-        "messages": normalised,
-        "retrieved_chunk_ids": all_chunk_ids,
-    }
+    if rows is None:
+        return [];
+    session=[]
+    for row in rows:
+        session.append({
+            "id":row[0],
+            "created_at":row[1],
+            "question":row[2],
+            "answer":row[3]
+            
+        })
+        # s["conversations"].sort(key=lambda c: c["created_at"],reverse=True)
+    
+    return list(session)
 
 
 def list_all_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
@@ -194,6 +251,7 @@ def list_all_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SI
         raise PermissionError("Only admins can list all conversations")
 
     page, page_size, offset = _clamp_paging(page, page_size)
+    
     params = {
         "tenant_id": user["tenant_id"],
         "user_id": user_id,
@@ -237,3 +295,20 @@ def list_all_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SI
         "total": total,
         "has_more": offset + len(rows) < total,
     }
+def store_rating(rating, conv_id):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE conversations SET rating = %s WHERE id = %s",
+            (rating, conv_id)
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+

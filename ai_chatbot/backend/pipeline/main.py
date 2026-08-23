@@ -5,10 +5,12 @@ from generation import build_answer, stream_text
 from students import get_student_context
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from conversations import store_rating
 import shutil
 import os
 from pdf_parser import extract_text_from_pdf
 from chunking import chunk_text
+from generation import create_conversation_id
 from embedding import embed_text
 from storage import get_connection
 from Auth import router as auth_router, verify_token
@@ -22,6 +24,7 @@ import feedback
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
+    expose_headers=["X-Conversation-Id"],
     allow_origins=[
         "http://localhost:5173",
     ],
@@ -44,13 +47,38 @@ app.include_router(auth_router)
 
 class ChatRequest(BaseModel):
     question: str
+    session_id: str
+    isNewSession:bool
     # registration_number removed -- identity now comes from the
     # verified JWT (user["linked_id"]), never from client input
 
+def fake_verify_token():
+    return {
+        "linked_id": "inst_001",
+        "role": "instructor",
+        "tenant_id": "uet",
+        "username" : "farrukh"
+    }
+# def fake_verify_token():
+#     # return {
+#     #     "linked_id": "2026-SE-03",
+#     #     "role": "student",
+#     #     "tenant_id": "uet",
+#     #     "username" : "noor",
+#     #     "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
+#     # }
+#     return {
+#             "linked_id": "adm_001",
+#             "role": "admin",
+#             "tenant_id": "uet",
+#             "username" : "Samayan",
+#             "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
+#         }
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, user=Depends(verify_token)):
-
+    print(request.isNewSession)
+    print("hello")
     student_ctx = None
     if user["role"] == "student":
         # linked_id is the student's internal student_id, taken from the
@@ -58,6 +86,7 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         student_ctx = get_student_context(user["linked_id"])
 
     chunks = retrieve_chunks(request.question)
+<<<<<<< HEAD
     result = build_answer(request.question, chunks, user, student_ctx)
 
     # The escalation decision travels in headers, never in the body. The
@@ -75,6 +104,14 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         stream_text(result["answer"]),
         media_type="text/plain",
         headers=headers,
+=======
+    # print (chunks)      //print retreived chunks
+    conv_id=create_conversation_id()
+    return StreamingResponse(
+        generate_answer(request.question, chunks, user,request.session_id,request.isNewSession ,conv_id,student_ctx),
+        media_type="text/plain",
+        headers={"X-Conversation-Id":conv_id},
+>>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
     )
 
 
@@ -168,7 +205,7 @@ async def upload_document(file: UploadFile = File(...), document_type: str = "ge
 
 
 @app.get("/api/documents/{document_id}/chunks")
-async def preview_chunks(document_id: int, user=Depends(verify_token)):
+async def preview_chunks(document_id: int, user=Depends(fake_verify_token)):
     if user["role"] != "admin":
         return {"error": "Only admins can view chunk previews"}
 
@@ -195,6 +232,40 @@ async def preview_chunks(document_id: int, user=Depends(verify_token)):
         "chunk_count": len(rows),
         "chunks": [{"chunk_index": r[0], "content": r[1]} for r in rows]
     }
+@app.get("/api/exam/{exam_id}/info")
+async def exam_info(exam_id: str, user=Depends(fake_verify_token)):
+    if user["role"] != "instructor":
+        return {"error": "Only instructor can view chunk previews"}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id ,title,subject,date,duration_minutes,start_at,end_at,department_id,semester_id,status
+        FROM exams
+        WHERE id = %s
+        """,
+        (exam_id,)
+    )
+    row = cur.fetchall()
+    rows=row[0]
+    cur.close()
+    conn.close()
+    if not rows:
+        return {}
+
+    return {"exam":{
+        "id": rows[0],
+        "title": rows[1],
+        "subject": rows[2],
+        "date": rows[3],
+        "duration": rows[4],
+        "start_at": rows[5],
+        "end_at": rows[6],
+        "department_id": rows[7],
+        "semester_id": rows[8],
+        "status": rows[9]
+    }};
 
 
 @app.delete("/api/documents/{document_id}")
@@ -270,6 +341,7 @@ ORDER BY chunk_retrieval_count DESC;""")
 
 class ExamChatRequest(BaseModel):
     question: str
+    session_id:str
 
 
 @app.post("/api/exam/chat")
@@ -278,16 +350,10 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
-    answer= generate_invigilator_answer(request.question, chunks, user)
+    answer= generate_invigilator_answer(request.question,request.session_id, user, chunks)
     return StreamingResponse(answer,media_type="plain/text")
 
-def fake_verify_token():
-    return {
-        "linked_id": "2026-SE-03",
-        "role": "student",
-        "tenant_id": "uet",
-        "username" : "Noor"
-    }
+
 @app.get("/api/exam_mode")
 async def exam_mode(user=Depends(verify_token)):
     conn = get_connection()
@@ -317,6 +383,7 @@ async def exam_mode(user=Depends(verify_token)):
 
 class InstructorChatRequest(BaseModel):
     question: str
+    session_id: str
 
 
 @app.post("/api/instructor/chat")
@@ -325,7 +392,7 @@ async def instructor_chat(request: InstructorChatRequest, user=Depends(verify_to
     part of an analytics answer is the result table, and a table is structured
     data rather than something to trickle out a token at a time."""
     try:
-        return answer_instructor_question(request.question, user)
+        return answer_instructor_question(request.question, request.session_id,user)
     except AnalyticsError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ModelUnavailable:
@@ -359,8 +426,8 @@ async def list_my_conversations(
     mode: str | None = Query(None, description="general | exam | instructor"),
     user=Depends(verify_token),
 ):
-    return conversation_store.list_conversations(user, page=page, page_size=page_size, mode=mode)
-
+    convo= conversation_store.list_conversations(user, page=page, page_size=page_size, mode=mode)
+    return {"session":convo}
 
 # Declared before /api/conversations/{conversation_id} would otherwise be a
 # concern, but the admin route sits under /api/admin/ so there is no clash.
@@ -383,14 +450,14 @@ async def list_all_conversations(
     )
 
 
-@app.get("/api/conversations/{conversation_id}")
-async def get_conversation(conversation_id: str, user=Depends(verify_token)):
-    conversation = conversation_store.get_conversation(user, conversation_id)
+@app.get("/api/conversations/{session_id}")
+async def get_conversation(session_id,user=Depends(fake_verify_token)):
+    conversation = conversation_store.get_conversation(user, session_id)
     # "not yours" and "does not exist" deliberately collapse into one 404 so
     # this cannot be used to enumerate other users' conversation ids.
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
+    return {"chat":conversation}
 
 
 # ---------------------------------------------------------
@@ -431,6 +498,12 @@ async def feedback_review_queue(
 
 @app.get("/me")
 def get_my_identity(user=Depends(verify_token)):
-    print(user.keys())
     return {"role": user["role"], "linked_id": user["linked_id"], "tenant_id": user["tenant_id"], "username" : user["username"]}
 
+class getRating(BaseModel):
+    rating: str
+
+@app.post("/api/conversations/{conv_id}/rate")
+def chatRating(conv_id: str, rating: getRating, user=Depends(verify_token)):
+    store_rating(rating.rating, conv_id)
+    return {"status": "ok"}

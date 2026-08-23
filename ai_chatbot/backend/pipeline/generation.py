@@ -3,18 +3,29 @@ from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
 import json
+import uuid
 
 import escalation
 
 load_dotenv()
 
+def create_conversation_id():
+    return f"conv-{uuid.uuid4()}"
+
+
+
+conversation_id = create_conversation_id()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
+<<<<<<< HEAD
 # How much text each yield pushes to the client. The answer is complete before
 # the first slice goes out -- see build_answer() for why.
 STREAM_SLICE = 20
+=======
+def generate_answer(question: str, chunks: list[dict], user, session_id ,isNewSession,conv_id,student_context: str | None = None):
+>>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
 
 
 def build_answer(question: str, chunks: list[dict], user,
@@ -53,6 +64,7 @@ Question:
 Answer:
 """
 
+<<<<<<< HEAD
     response = client.models.generate_content_stream(model=MODEL, contents=prompt)
     draft = "".join(chunk.text for chunk in response if chunk.text)
 
@@ -89,9 +101,25 @@ def _save_conversation(question, answer, chunks, user, escalated: bool) -> str:
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer,
          "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]},
+=======
+    response = client.models.generate_content_stream(
+        model="gemini-3.6-flash",
+        contents=prompt
+    )
+    full_answer=""
+    for chunk in response:
+        if chunk.text:
+            full_answer+=chunk.text
+            yield chunk.text
+        
+    messages=[
+        {"role":"user", "content":question},
+        {"role":"assistant","content":full_answer,"retrieved_chunk_id":[c["id"] for c in chunks if "id" in c ]}
+>>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
     ]
 
     conn = get_connection()
+<<<<<<< HEAD
     try:
         cur = conn.cursor()
         cur.execute(
@@ -106,3 +134,51 @@ def _save_conversation(question, answer, chunks, user, escalated: bool) -> str:
         return conversation_id
     finally:
         conn.close()
+=======
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO conversations (id,user_id, role, messages, tenant_id, session_id)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (conv_id,user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"],session_id)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    if(isNewSession):
+        generate_session_title(question,full_answer,session_id)
+            
+
+def generate_session_title(question: str, answer: str,session_id:str) -> str:
+    prompt = f"""Generate a short, descriptive title (max 6 words, no quotes, no punctuation at the end) for this conversation based on its first exchange.
+
+Question: {question}
+Answer: {answer[:300]}
+
+Title:"""
+
+    response = client.models.generate_content(
+    model="gemini-3.6-flash",
+    contents=prompt,
+    config={
+        "max_output_tokens": 200
+    }
+)
+
+
+    if response.text:
+        title = response.text.strip().strip('"').strip("'")
+    else:
+        title = "New Chat"
+    # return title[:60]  # hard safety cap on length
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+            """INSERT INTO session_titles (title,session_id)
+               VALUES (%s, %s)""",
+            (title,session_id)
+        )
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+>>>>>>> ec46fa620dd1064cf374a5d14559935e39a11116
