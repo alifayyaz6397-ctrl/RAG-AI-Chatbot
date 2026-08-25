@@ -43,7 +43,7 @@ body {
     display: flex;
     flex-direction: column;
 
-    background: #171717;
+    background: #141414;
     border-right: 1px solid #2f2f2f;
 
     box-sizing: border-box;
@@ -114,7 +114,6 @@ h1 {
     z-index: 100;
     flex-shrink: 0;
     font-size: 42px;
-    
 }
 
 /* ===========================
@@ -154,7 +153,7 @@ h1 {
 
 .user-message {
     align-self: flex-end;
-    background: #303030;
+    background: #212122;
     color: white;
     padding: 15px 18px;
     border-radius: 24px;
@@ -166,13 +165,13 @@ h1 {
 
 .assistant-message {
     align-self: flex-start;
-    background: #303030;
+    background: transparent;
+    border: 1px solid #2a2a2a;
     color: #ECECEC;
     padding: 15px 18px;
     border-radius: 24px;
     max-width: 75%;
     word-break: break-word;
-    white-space: pre-wrap;
     line-height: 1.7;
 }
 
@@ -205,10 +204,18 @@ h1 {
     align-items: center;
 
     gap: 12px;
-    background: #303030;
-    border-radius: 30px;
+    background: #262626;
+    border: 1px solid #333333;
+    border-radius: 26px;
     padding: 12px 18px;
     box-sizing: border-box;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-area:focus-within {
+    border-color: #4a7fd6;
+    box-shadow: 0 0 0 3px rgba(79, 141, 246, 0.15), 0 4px 18px rgba(0, 0, 0, 0.3);
 }
 
 .input-area textarea {
@@ -233,11 +240,11 @@ h1 {
 }
 
 .input-area textarea::placeholder {
-    color: #9A9A9A;
+    color: #ABABAB;
 }
 
 .input-area input::placeholder {
-    color: #9A9A9A;
+    color: #ABABAB;
 }
 
 .input-area button {
@@ -303,9 +310,18 @@ h1 {
     background: #666;
 }
 
+/* Sidebar gets a thinner scrollbar than the shared 10px above */
+.sidebar-content::-webkit-scrollbar {
+    width: 6px;
+}
+
 .assistant-message p,
 .user-message p {
     margin: 0;
+}
+
+.assistant-message p:empty {
+    display: none;
 }
 
 .assistant-message p+p,
@@ -313,10 +329,113 @@ h1 {
     margin-top: 10px;
 }
 
+.assistant-message h1,
+.assistant-message h2,
+.assistant-message h3,
+.assistant-message h4 {
+    color: #ffffff;
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 14px 0 6px;
+}
+
+.assistant-message h1:first-child,
+.assistant-message h2:first-child,
+.assistant-message h3:first-child,
+.assistant-message h4:first-child {
+    margin-top: 0;
+}
+
+.assistant-message h1 {
+    font-size: 1.35em;
+}
+
+.assistant-message h2 {
+    font-size: 1.2em;
+}
+
+.assistant-message h3 {
+    font-size: 1.08em;
+}
+
+.assistant-message h4 {
+    font-size: 1em;
+}
+
+.assistant-message strong {
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.assistant-message em {
+    color: inherit;
+    font-style: italic;
+}
+
 .assistant-message ul,
 .assistant-message ol {
-    margin: 8px 0;
+    margin: 6px 0;
     padding-left: 22px;
+}
+
+.assistant-message li {
+    margin: 6px 0;
+}
+
+.assistant-message li::marker {
+    color: #7a7a7a;
+}
+
+.assistant-message li>ul,
+.assistant-message li>ol {
+    margin: 4px 0 2px;
+}
+
+.assistant-message li>p {
+    margin: 0;
+    display: inline;
+}
+
+.assistant-message li>p+p {
+    display: block;
+    margin-top: 6px;
+}
+
+.assistant-message hr {
+    border: none;
+    border-top: 1px solid #2f2f2f;
+    margin: 16px 0;
+}
+
+.assistant-message blockquote {
+    margin: 10px 0;
+    padding: 4px 14px;
+    border-left: 3px solid #3a3a3a;
+    color: #b8b8b8;
+}
+
+.assistant-message blockquote p {
+    margin: 0;
+}
+
+.assistant-message table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-size: 0.95em;
+}
+
+.assistant-message th,
+.assistant-message td {
+    border: 1px solid #2e2e2e;
+    padding: 8px 12px;
+    text-align: left;
+}
+
+.assistant-message th {
+    background: #1e1e1e;
+    color: #ffffff;
+    font-weight: 600;
 }
 
 .assistant-message code {
@@ -343,20 +462,58 @@ h1 {
     color: #6ea8fe;
 }
 
-.user-message-wrapper {
-    align-self: flex-end;
+.message-row {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    max-width: 75%;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: 80%;
 }
 
-.assistant-message-wrapper {
+.message-row.user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+
+.message-row.assistant {
     align-self: flex-start;
+    flex-direction: row;
+}
+
+.message-avatar {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    margin-top: 2px;
+}
+
+.message-avatar.assistant {
+    background: #2f7df6;
+    color: #ffffff;
+}
+
+.message-avatar.user {
+    background: #3a3a3a;
+    color: #ECECEC;
+}
+
+.message-col {
     display: flex;
     flex-direction: column;
+    min-width: 0;
+}
+
+.message-col.user {
+    align-items: flex-end;
+}
+
+.message-col.assistant {
     align-items: flex-start;
-    max-width: 75%;
 }
 
 .user-message,
@@ -386,10 +543,8 @@ h1 {
     transition: opacity 0.2s, background 0.2s, color 0.2s;
 }
 
-.user-message-wrapper:hover .copy-btn,
-.assistant-message-wrapper:hover .copy-btn,
-.user-message-wrapper:hover .rate-btn,
-.assistant-message-wrapper:hover .rate-btn {
+.message-row:hover .copy-btn,
+.message-row:hover .rate-btn {
     opacity: 1;
 }
 
@@ -426,7 +581,8 @@ h1 {
 }
 
 .input-area button:disabled {
-    background: #4a4a4a;
+    background: #2f7df6;
+    opacity: 0.5;
     cursor: not-allowed;
 }
 
@@ -436,8 +592,47 @@ h1 {
 }
 
 .assistant-message.error {
-    background: #3a1f1f;
-    color: #ff8080;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: #1c1414;
+    border: 1px solid #5c2626;
+    border-left: 3px solid #ff6961;
+    color: #ff8f8f;
+}
+
+.error-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: #ff6961;
+}
+
+.error-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.retry-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    margin-top: 10px;
+    background: rgba(255, 105, 97, 0.1);
+    border: 1px solid rgba(255, 105, 97, 0.35);
+    color: #ff8f8f;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 6px 13px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.retry-btn:hover {
+    background: rgba(255, 105, 97, 0.2);
+    border-color: rgba(255, 105, 97, 0.55);
 }
 
 .main-header {
@@ -485,7 +680,7 @@ h1 {
     left: 24px;
     top: 50%;
     transform: translateY(-50%);
-    font-size: 15px;
+    font-size: 20px;
     font-weight: 600;
     color: #cfcfcf;
     white-space: nowrap;
@@ -520,6 +715,8 @@ h1 {
     letter-spacing: 0.06em;
     color: #7a7a7a;
     padding: 14px 10px 8px;
+    margin-top: 10px;
+    border-top: 1px solid #262626;
 }
 
 .docs-section {
@@ -1360,4 +1557,69 @@ h1 {
 .filter-result-item:hover {
     background: #262626;
     border-color: #3a3a3a;
+}
+
+/* ============================================================
+   Empty-chat hero: logo + greeting + suggestion cards
+   ============================================================ */
+
+.empty-hero {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 60px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.empty-hero-icon {
+    color: #6ea8fe;
+    margin-bottom: 18px;
+}
+
+.empty-hero-greeting {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: #ECECEC;
+    margin-bottom: 32px;
+}
+
+.suggestion-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.suggestion-row {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    background: #1c1c1c;
+    border: 1px solid #2a2a2a;
+    color: #cfcfcf;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 13px 16px;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.suggestion-row svg {
+    flex-shrink: 0;
+    color: #6ea8fe;
+}
+
+.suggestion-row:hover {
+    background: #242424;
+    border-color: #3f3f3f;
+    color: #ECECEC;
 }

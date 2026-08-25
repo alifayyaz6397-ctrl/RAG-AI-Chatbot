@@ -49,10 +49,12 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    username: str
 
 class TokenResponse(BaseModel):
     access_token: str
     role: str
+    username: str
 
 
 # ---------------------------------------------------------
@@ -97,7 +99,7 @@ def signup(req: SignupRequest):
     conn.close()
 
     token = create_token(role="student", linked_id=req.student_id, tenant_id=tenant_id,username=req.username)
-    return TokenResponse(access_token=token, role="student")
+    return TokenResponse(access_token=token, role="student",username=req.username)
 
 
 # ---------------------------------------------------------
@@ -130,7 +132,7 @@ def login(req: LoginRequest):
     username = {"student": student_name, "instructor": instructor_name, "admin": admin_name}[role]
 
     token = create_token(role=role, linked_id=linked_id, tenant_id=tenant_id,username=username)
-    return TokenResponse(access_token=token, role=role)
+    return TokenResponse(access_token=token, role=role, username=req.username)
 
 
 # ---------------------------------------------------------
