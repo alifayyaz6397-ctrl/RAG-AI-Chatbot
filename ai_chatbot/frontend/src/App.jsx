@@ -785,7 +785,7 @@ function App() {
 
                 <div className="empty-hero-greeting">
                   {getGreeting()}
-                  {role ? `, ${role.charAt(0).toUpperCase()}${role.slice(1)}` : ""}
+                  {username ? `, ${username.charAt(0).toUpperCase()}${username.slice(1)}` : ""}
                 </div>
 
                 {suggestions.length > 0 && (

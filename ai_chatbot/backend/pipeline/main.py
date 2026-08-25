@@ -141,7 +141,7 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
         route = _route_admin_question(request.question)
         if route == "run_analytics":
             try:
-                return instructor.answer_admin_question(request.question, request.session_id, user)
+                return instructor.answer_admin_question(request.question, request.session_id, request.isNewSession,user)
             except AnalyticsError as exc:
                 raise HTTPException(status_code=403, detail=str(exc))
             except instructor.ModelUnavailable:
@@ -447,15 +447,16 @@ async def exam_mode(user=Depends(verify_token)):
 class InstructorChatRequest(BaseModel):
     question: str
     session_id: str
+    isNewSession:bool
 
 
 @app.post("/api/instructor/chat")
-async def instructor_chat(request: InstructorChatRequest, user=Depends(fake_verify_token)):
+async def instructor_chat(request: InstructorChatRequest, user=Depends(verify_token)):
     """Not a streamed response, unlike the student and exam chats: the useful
     part of an analytics answer is the result table, and a table is structured
     data rather than something to trickle out a token at a time."""
     try:
-        return instructor.answer_instructor_question(request.question, request.session_id,user)
+        return instructor.answer_instructor_question(request.question, request.session_id,request.isNewSession,user)
     except AnalyticsError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except instructor.ModelUnavailable:

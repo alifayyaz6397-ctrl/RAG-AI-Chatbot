@@ -850,7 +850,7 @@ def write_report(question: str, result: dict, system_prompt: str = INSTRUCTOR_SY
     return answer or plain_summary(result)
 
 
-def answer_instructor_question(question: str, session_id: str, user) -> dict:
+def answer_instructor_question(question: str, session_id: str,isNewSession:bool, user) -> dict:
     """Full instructor pipeline. Always returns a dict -- never raises for an
     ordinary 'I couldn't answer that', so the route stays simple."""
     scope = Scope(user)  # raises AnalyticsError for a non-instructor role
@@ -886,6 +886,8 @@ def answer_instructor_question(question: str, session_id: str, user) -> dict:
         session_id, question, answer, user, intent=intent,
         confidence=confidence, result=result, mode="instructor",
     )
+    if(isNewSession):
+        generate_session_title(question,answer,session_id)
 
     return {
         "answer": answer,
@@ -902,7 +904,7 @@ def answer_instructor_question(question: str, session_id: str, user) -> dict:
 ADMIN_CONFIDENCE_THRESHOLD = 0.5
 
 
-def answer_admin_question(question: str, session_id: str, user) -> dict:
+def answer_admin_question(question: str, session_id: str,isNewSession: bool, user) -> dict:
     """Full admin pipeline: NL -> (template or SQL) -> validate -> execute
     -> prose.
 
@@ -952,6 +954,8 @@ def answer_admin_question(question: str, session_id: str, user) -> dict:
         session_id, question, answer, user, intent=intent,
         confidence=confidence, result=result, mode="admin",
     )
+    if(isNewSession):
+        generate_session_title(question,answer,session_id);
 
     response = {
         "answer": answer,
