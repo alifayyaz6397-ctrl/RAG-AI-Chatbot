@@ -14,12 +14,16 @@ import {
   Trash2,
   X,
   FileText,
-  Summary,
   MessageSquare,
   Search,
   ArrowLeft,
   ThumbsUp,
   ThumbsDown,
+  Plus,
+  Users,
+  AlertTriangle,
+  RefreshCw,
+  Bot,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
@@ -27,7 +31,7 @@ const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
   // alert(localStorage.getItem("token"))
-  const { token, role, logout } = useAuth();
+  const { token, role,username, logout } = useAuth();
   const [showSignup, setShowSignup] = useState(false);
   const [citationStats, setCitationStats] = useState([]);
   const [input, setInput] = useState("");
@@ -64,6 +68,7 @@ function App() {
   const [isLoadingExamDetail, setIsLoadingExamDetail] = useState(false);
   const [selectedChatDetail, setSelectedChatDetail] = useState(null);
   const [currentChatTitle, setCurrentChatTitle] = useState("New Chat");
+  const [suggestions, setSuggestion] = useState([]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -124,6 +129,34 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, adminPanelView]);
+
+  // Fetch the sample/suggestion questions for the current role + mode combo,
+  // so they're ready the moment an empty chat (New Chat / login) is shown.
+  useEffect(() => {
+    if (token && role) {
+      suggestionQns();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, role, analyticMode, examMode]);
+
+  async function suggestionQns() {
+    // Your suggestion_qns table folds instructor-analysis and student-exam-mode
+    // questions into the same `role` column ('analysis' / 'exam') rather than
+    // a separate mode column, so map the current role+mode combo to that value.
+    let effectiveRole = role;
+    if (role === "instructor" && analyticMode) effectiveRole = "analysis";
+    if (role === "student" && examMode) effectiveRole = "exam";
+
+    try {
+      const res = await fetch(`${API_BASE}/api/suggestion_qns/${effectiveRole}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setSuggestion(data.suggestions || []);
+    } catch (err) {
+      console.error("Failed to load suggestion questions", err);
+    }
+  }
 
   async function adminSearchChat() {
     const params = new URLSearchParams();
@@ -324,10 +357,10 @@ function App() {
       setIsNewSession(false);
 
       if (!res.ok) {
-        let errorText = "⚠️ Something went wrong. Please try again.";
+        let errorText = "Something went wrong. Please try again.";
         if (res.status === 429) {
           errorText =
-            "⚠️ Rate limit reached. Please wait a moment and try again.";
+            "Rate limit reached. Please wait a moment and try again.";
         }
         setMessages((prev) => {
           const updated = [...prev];
@@ -361,7 +394,7 @@ function App() {
         const updated = [...prev];
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
-          content: "⚠️ Something went wrong. Please try again.",
+          content: "Something went wrong. Please try again.",
           isError: true,
         };
         return updated;
@@ -414,9 +447,9 @@ function App() {
       console.error("Failed to load conversation:", err);
     }
   }
-  async function sendMessage() {
-    console.log("Hello");
-    const question = input.trim();
+
+  async function sendMessage(overrideQuestion) {
+    const question = (overrideQuestion ?? input).trim();
     if (!question || isSending) return;
 
     setIsSending(true);
@@ -468,10 +501,10 @@ function App() {
       }
 
       if (!response.ok) {
-        let errorText = "⚠️ Something went wrong. Please try again.";
+        let errorText = "Something went wrong. Please try again.";
         if (response.status === 429) {
           errorText =
-            "⚠️ Rate limit reached. Please wait a moment and try again.";
+            "Rate limit reached. Please wait a moment and try again.";
         }
 
         setMessages((prev) => {
@@ -480,6 +513,31 @@ function App() {
             ...updated[updated.length - 1],
             content: errorText,
             isError: true,
+          };
+          return updated;
+        });
+        return;
+      }
+
+      // /api/chat now returns either a streamed RAG answer (text/plain) or
+      // a JSON analytics result (when an admin question got routed to
+      // run_analytics server-side). No X-Conversation-Id header comes with
+      // the JSON path, so conversation_id from the body fills that in.
+      const contentType = response.headers.get("content-type") || "";
+
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            content: data.answer ?? "No answer was returned.",
+            data: data.data ?? null,
+            intent: data.intent ?? null,
+            confidence: data.confidence ?? null,
+            convId: updated[updated.length - 1].convId ?? data.conversation_id,
+            isError: !data.resolved,
           };
           return updated;
         });
@@ -510,7 +568,7 @@ function App() {
         const updated = [...prev];
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
-          content: "⚠️ Something went wrong. Please try again.",
+          content: "Something went wrong. Please try again.",
           isError: true,
         };
         return updated;
@@ -518,6 +576,27 @@ function App() {
     } finally {
       setIsSending(false);
     }
+  }
+
+  // Retries a failed assistant turn: drops the failed pair from the
+  // visible history and resends the original question through the
+  // normal sendMessage() flow (which re-appends both messages).
+  function retryMessage(index) {
+    const userMsg = messages[index - 1];
+    if (!userMsg || userMsg.role !== "user") return;
+    setMessages((prev) => prev.slice(0, index - 1));
+    sendMessage(userMsg.content);
+  }
+
+  function getGreeting() {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 18) return "Good afternoon";
+    return "Good evening";
+  }
+
+  function handleSuggestionClick(question) {
+    sendMessage(question);
   }
 
   // ---------- Auth gating (after all hooks, per Rules of Hooks) ----------
@@ -577,7 +656,7 @@ function App() {
                   className="sidebar-nav-item"
                   onClick={() => setAdminPanelView("chats")}
                 >
-                  <MessageSquare size={16} />
+                  <Users size={16} />
                   Client Chats
                 </button>
               </div>
@@ -620,7 +699,7 @@ function App() {
                 handleNewChat();
               }}
             >
-              <MessageSquare size={16} />
+              <Plus size={16} />
               New Chat
             </button>
           )}
@@ -654,7 +733,7 @@ function App() {
 
         <div className="sidebar-footer">
           <div className="user-info">
-            <span className={`user-role ${role}`}>{role}</span>
+            <span className={`user-role ${role}`}>{username}</span>
             <button onClick={logout} className="logout-btn">
               Log out
             </button>
@@ -676,70 +755,132 @@ function App() {
           )}
         </div>
 
-        {/* TODO(design): populated empty state (logo + suggested prompts)
-            goes here once messages.length === 0 — left as-is per scope agreement. */}
-
         <div className="chat-wrapper" ref={chatWrapperRef}>
           <div className="content">
-            <div className="chat-box">
-              {messages.map((msg, index) => (
-                <div
-                  key={index}
-                  className={
-                    msg.role === "user"
-                      ? "user-message-wrapper"
-                      : "assistant-message-wrapper"
-                  }
+            {messages.length === 0 ? (
+              <div className="empty-hero">
+                <svg
+                  className="empty-hero-icon"
+                  width="52"
+                  height="52"
+                  viewBox="0 0 100 100"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
                 >
-                  <div
-                    className={
-                      msg.role === "user"
-                        ? "user-message"
-                        : msg.isError
-                          ? "assistant-message error"
-                          : "assistant-message"
-                    }
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
-                  </div>
+                  <circle cx="50" cy="10" r="5" fill="currentColor" />
+                  <rect x="47.5" y="15" width="5" height="14" fill="currentColor" />
+                  <rect x="24" y="29" width="52" height="46" rx="14" fill="currentColor" />
+                  <rect x="14" y="44" width="11" height="18" rx="5.5" fill="currentColor" />
+                  <rect x="75" y="44" width="11" height="18" rx="5.5" fill="currentColor" />
+                  <circle cx="39" cy="50" r="5" fill="#171717" />
+                  <circle cx="61" cy="50" r="5" fill="#171717" />
+                  <path
+                    d="M36 60 Q50 70 64 60"
+                    stroke="#171717"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                </svg>
 
-                  <div className="message-actions">
-                    <button
-                      className="copy-btn"
-                      onClick={() => copyToClipboard(msg.content, index)}
-                      title="Copy"
-                    >
-                      {copiedIndex === index ? (
-                        <Check size={16} />
-                      ) : (
-                        <Copy size={16} />
-                      )}
-                    </button>
-
-                    {msg.role === "assistant" && msg.convId && (
-                      <>
-                        <button
-                          className={`rate-btn rate-up ${msg.rating === "up" ? "active" : ""}`}
-                          onClick={() => rateMessage(index, msg.convId, "up")}
-                          title="Good response"
-                        >
-                          <ThumbsUp size={15} />
-                        </button>
-                        <button
-                          className={`rate-btn rate-down ${msg.rating === "down" ? "active" : ""}`}
-                          onClick={() => rateMessage(index, msg.convId, "down")}
-                          title="Bad response"
-                        >
-                          <ThumbsDown size={15} />
-                        </button>
-                      </>
-                    )}
-                  </div>
+                <div className="empty-hero-greeting">
+                  {getGreeting()}
+                  {role ? `, ${role.charAt(0).toUpperCase()}${role.slice(1)}` : ""}
                 </div>
-              ))}
-            </div>
+
+                {suggestions.length > 0 && (
+                  <div className="suggestion-list">
+                    {suggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        className="suggestion-row"
+                        onClick={() => handleSuggestionClick(s.question)}
+                      >
+                        <Search size={15} />
+                        <span>{s.question}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="chat-box">
+                {messages.map((msg, index) => (
+                  <div key={index} className={`message-row ${msg.role}`}>
+                    <div className={`message-avatar ${msg.role}`}>
+                      {msg.role === "user"
+                        ? (username ? username.charAt(0).toUpperCase() : "U")
+                        : <Bot size={15} />}
+                    </div>
+
+                    <div className={`message-col ${msg.role}`}>
+                      {msg.role === "user" ? (
+                        <div className="user-message">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : msg.isError ? (
+                        <div className="assistant-message error">
+                          <AlertTriangle size={16} className="error-icon" />
+                          <div className="error-body">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {msg.content}
+                            </ReactMarkdown>
+                            <button
+                              className="retry-btn"
+                              onClick={() => retryMessage(index)}
+                            >
+                              <RefreshCw size={13} />
+                              Try again
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="assistant-message">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        </div>
+                      )}
+
+                      <div className="message-actions">
+                        <button
+                          className="copy-btn"
+                          onClick={() => copyToClipboard(msg.content, index)}
+                          title="Copy"
+                        >
+                          {copiedIndex === index ? (
+                            <Check size={16} />
+                          ) : (
+                            <Copy size={16} />
+                          )}
+                        </button>
+
+                        {msg.role === "assistant" && msg.convId && (
+                          <>
+                            <button
+                              className={`rate-btn rate-up ${msg.rating === "up" ? "active" : ""}`}
+                              onClick={() => rateMessage(index, msg.convId, "up")}
+                              title="Good response"
+                            >
+                              <ThumbsUp size={15} />
+                            </button>
+                            <button
+                              className={`rate-btn rate-down ${msg.rating === "down" ? "active" : ""}`}
+                              onClick={() => rateMessage(index, msg.convId, "down")}
+                              title="Bad response"
+                            >
+                              <ThumbsDown size={15} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -788,7 +929,7 @@ function App() {
               />
 
               <button
-                onClick={sendMessage}
+                onClick={() => sendMessage()}
                 disabled={isSending}
                 className="send-btn"
               >

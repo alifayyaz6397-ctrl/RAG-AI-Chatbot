@@ -1,11 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
+from google.genai import types
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
 from generation import generate_answer
 from students import get_student_context
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from conversations import store_rating
+from conversations import store_rating,suggesation_qns
 import shutil
 import os
 from pdf_parser import extract_text_from_pdf
@@ -16,7 +17,7 @@ from storage import get_connection
 from Auth import router as auth_router, verify_token
 from invigilator import generate_invigilator_answer
 from retrieval import retrieve_exam_chunks
-from instructor import answer_instructor_question, ModelUnavailable
+import instructor
 from analytics import AnalyticsError, Scope, list_owned_exams
 import conversations as conversation_store
 
@@ -42,47 +43,139 @@ class ChatRequest(BaseModel):
     # registration_number removed -- identity now comes from the
     # verified JWT (user["linked_id"]), never from client input
 
-def fake_verify_token():
-    return {
-        "linked_id": "inst_001",
-        "role": "instructor",
-        "tenant_id": "uet",
-        "username" : "farrukh"
-    }
 # def fake_verify_token():
-#     # return {
-#     #     "linked_id": "2026-SE-03",
-#     #     "role": "student",
-#     #     "tenant_id": "uet",
-#     #     "username" : "noor",
-#     #     "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
-#     # }
 #     return {
-#             "linked_id": "adm_001",
-#             "role": "admin",
-#             "tenant_id": "uet",
-#             "username" : "Samayan",
-#             "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
-#         }
+#         "linked_id": "inst_001",
+#         "role": "instructor",
+#         "tenant_id": "uet",
+#         "username" : "farrukh"
+#     }
+def fake_verify_token():
+    # return {
+    #     "linked_id": "2026-SE-03",
+    #     "role": "student",
+    #     "tenant_id": "uet",
+    #     "username" : "noor",
+    #     "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
+    # }
+    return {
+            "linked_id": "adm_001",
+            "role": "admin",
+            "tenant_id": "uet",
+            "username" : "Samayan",
+            "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
+        }
+ADMIN_ROUTER_TOOLS = [
+    types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="search_knowledge_base",
+            description=(
+                "Search course materials and uploaded documents for conceptual, "
+                "factual, or how-to questions -- definitions, explanations, "
+                "'what is X', 'how does X work', course content lookups. Use "
+                "this for anything that isn't about counting, aggregating, or "
+                "looking up records in the platform's own data."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        ),
+        types.FunctionDeclaration(
+            name="run_analytics",
+            description=(
+                "Answer questions about the platform's own stored data -- "
+                "student/instructor/department counts, exam results, pass "
+                "rates, enrollments, certificates, support tickets, "
+                "escalations, or conversation/citation stats. Use this for "
+                "anything that needs a number or record pulled from the "
+                "database rather than explained from course material."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"question": {"type": "string"}},
+                "required": ["question"],
+            },
+        ),
+    ])
+]
+
+
+def _route_admin_question(question: str) -> str:
+    """Asks Gemini which lane an admin's question belongs in. Defaults to
+    'search_knowledge_base' whenever the model doesn't clearly call
+    run_analytics -- small talk, an unclear question, or a failed call all
+    fall back to RAG, since RAG answering plainly ("that's not in the
+    provided context") is a safe failure mode and silently routing into
+    analytics on a weak signal is not. This only decides which existing
+    pipeline runs; it doesn't touch the database or the knowledge base
+    itself, and everything downstream (Scope/AdminScope, validate_sql, the
+    template allowlist) still applies exactly as before."""
+    try:
+        response = instructor.client.models.generate_content(
+            model=instructor.MODEL,
+            contents=question,
+            config=types.GenerateContentConfig(tools=ADMIN_ROUTER_TOOLS),
+        )
+        part = response.candidates[0].content.parts[0]
+        function_call = getattr(part, "function_call", None)
+        if function_call and function_call.name == "run_analytics":
+            return "run_analytics"
+    except Exception:
+        pass
+    return "search_knowledge_base"
+
+
+# --- replace the existing /api/chat route with this ---
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, user=Depends(verify_token)):
-    print(request.isNewSession)
-    print("hello")
     student_ctx = None
     if user["role"] == "student":
         # linked_id is the student's internal student_id, taken from the
         # verified token -- not something the client can override
         student_ctx = get_student_context(user["linked_id"])
 
+    if user["role"] == "admin":
+        route = _route_admin_question(request.question)
+        if route == "run_analytics":
+            try:
+                return instructor.answer_admin_question(request.question, request.session_id, user)
+            except AnalyticsError as exc:
+                raise HTTPException(status_code=403, detail=str(exc))
+            except instructor.ModelUnavailable:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The analytics assistant is busy right now. Please try again in a moment.",
+                )
+        # else: fall through to RAG below, same as every other role
+
     chunks = retrieve_chunks(request.question)
-    # print (chunks)      //print retreived chunks
-    conv_id=create_conversation_id()
+    conv_id = create_conversation_id()
     return StreamingResponse(
-        generate_answer(request.question, chunks, user,request.session_id,request.isNewSession ,conv_id,student_ctx),
+        generate_answer(request.question, chunks, user, request.session_id, request.isNewSession, conv_id, student_ctx),
         media_type="text/plain",
-        headers={"X-Conversation-Id":conv_id},
+        headers={"X-Conversation-Id": conv_id},
     )
+# @app.post("/api/chat")
+# async def chat(request: ChatRequest, user=Depends(verify_token)):
+#     # print(request.isNewSession)
+#     # print("hello")
+#     student_ctx = None
+#     if user["role"] == "student":
+#         # linked_id is the student's internal student_id, taken from the
+#         # verified token -- not something the client can override
+#         student_ctx = get_student_context(user["linked_id"])
+
+#     chunks = retrieve_chunks(request.question)
+#     # print (chunks)      //print retreived chunks
+#     conv_id=create_conversation_id()
+#     return StreamingResponse(
+#         generate_answer(request.question, chunks, user,request.session_id,request.isNewSession ,conv_id,student_ctx),
+#         media_type="text/plain",
+#         headers={"X-Conversation-Id":conv_id},
+#     )
 
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
@@ -320,7 +413,7 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
         return {"error": "Exam mode is only available to students"}
 
     chunks = retrieve_exam_chunks(request.question)
-    answer= generate_invigilator_answer(request.question,request.session_id, user, chunks)
+    answer= generate_invigilator_answer(request.question,request.session_id, chunks,user)
     return StreamingResponse(answer,media_type="plain/text")
 
 
@@ -357,15 +450,15 @@ class InstructorChatRequest(BaseModel):
 
 
 @app.post("/api/instructor/chat")
-async def instructor_chat(request: InstructorChatRequest, user=Depends(verify_token)):
+async def instructor_chat(request: InstructorChatRequest, user=Depends(fake_verify_token)):
     """Not a streamed response, unlike the student and exam chats: the useful
     part of an analytics answer is the result table, and a table is structured
     data rather than something to trickle out a token at a time."""
     try:
-        return answer_instructor_question(request.question, request.session_id,user)
+        return instructor.answer_instructor_question(request.question, request.session_id,user)
     except AnalyticsError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
-    except ModelUnavailable:
+    except instructor.ModelUnavailable:
         # The question was never classified, so there is no report to fall back
         # to -- unlike a failure in the report writer, which degrades to the
         # raw numbers instead of failing.
@@ -441,3 +534,8 @@ class getRating(BaseModel):
 def chatRating(conv_id: str, rating: getRating, user=Depends(verify_token)):
     store_rating(rating.rating, conv_id)
     return {"status": "ok"}
+
+@app.get("/api/suggestion_qns/{role}")
+def suggestions(role:str,user=Depends(fake_verify_token)):
+    response =suggesation_qns(role)
+    return {"suggestions": response}

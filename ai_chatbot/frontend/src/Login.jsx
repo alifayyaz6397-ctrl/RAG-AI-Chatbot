@@ -30,8 +30,9 @@ function Login({ onSwitchToSignup }) {
         return;
       }
 
-      login(data.access_token, data.role);
+      login(data.access_token, data.role, data.username);
     } catch (err) {
+      console.error("Login error:", err); // logs the real error to devtools console
       setError("Could not reach the server. Please try again.");
     } finally {
       setIsLoading(false);

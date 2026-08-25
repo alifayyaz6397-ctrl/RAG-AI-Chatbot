@@ -312,3 +312,19 @@ def store_rating(rating, conv_id):
         conn.close()
 
 
+def suggesation_qns(role):
+    conn =get_connection();
+    try:
+        cur=conn.cursor();
+        cur.execute("select question ,role from suggestion_qns where role=%s",(role,))
+        rows=cur.fetchall()
+        cur.close;
+    finally:
+        conn.close()
+    response=[]
+    for row in rows:
+        response.append({
+        "question":row[0],
+        "role":row[1]
+    })
+    return response
