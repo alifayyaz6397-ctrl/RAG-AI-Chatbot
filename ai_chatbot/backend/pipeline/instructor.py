@@ -484,7 +484,13 @@ def _generate(prompt: str, config: dict | None = None) -> str:
 
 # Self-reported confidence is a soft signal, not a probability -- it is used
 # only to separate "clearly one of our four reports" from "no idea".
-CONFIDENCE_THRESHOLD = 0
+#
+# Was 0, which disabled the gate entirely: every classification passed, so
+# FALLBACK_ANSWER was unreachable and the CLASSIFIER_PROMPT's own low-confidence
+# examples ("Tell me a joke" -> 0.02, "show me every instructor's results"
+# -> 0.0) still ran a report. 0.6 is the value the prompt tells the model to
+# score below for off-topic, single-student, or out-of-scope questions.
+CONFIDENCE_THRESHOLD = 0.6
 
 FALLBACK_ANSWER = (
     "I couldn't map that to a report. I can answer questions about: "

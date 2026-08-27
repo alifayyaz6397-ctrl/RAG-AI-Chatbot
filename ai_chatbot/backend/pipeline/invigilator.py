@@ -1,8 +1,10 @@
 import os
 import json
+import re
 from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
+from students import get_active_exam
 import llm
 
 load_dotenv()
@@ -171,6 +173,22 @@ Respond with exactly one word: TECHNICAL, MEDICAL, ACCOMMODATION, or OTHER.
 """
 
 
+# Matches only questions about the exam clock. Kept deliberately narrow: it
+# gates nothing on its own, it just stops a timing question from being refused
+# for lack of a matching rules document. See generate_invigilator_answer().
+_TIME_QUESTION_RE = re.compile(
+    r"\b("
+    r"time\s+(left|remaining)"
+    r"|how\s+(much\s+time|long|many\s+minutes)"
+    r"|minutes\s+(left|remaining)"
+    r"|when\s+does\s+(it|the\s+exam|this)\s+(end|finish)"
+    r"|how\s+long\s+(do|have)\s+i"
+    r"|deadline"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def guard_check(question: str, answer: str) -> bool:
     """Returns True if the answer is safe to show the student.
 
@@ -261,8 +279,21 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user,
         yield (answer)
         return
 
+    # Time questions are answered from the exams table, not from a rules
+    # document, so "no chunks retrieved" is the wrong reason to refuse them --
+    # "How much time do I have left?" retrieves nothing at any sane cut-off and
+    # was refused deterministically even with a live exam window in hand.
+    #
+    # Deliberately a tight literal pattern rather than another model call: it
+    # is auditable, costs nothing, and cannot be talked into matching. It only
+    # relaxes Layer 1, and only while an exam is actually active -- the draft
+    # still goes through guard_check() exactly as before, so an academic
+    # question that happens to contain "how long" is still caught there.
+    asks_about_time = bool(_TIME_QUESTION_RE.search(question))
+    active_exam = get_active_exam(user["linked_id"])
+
     # Layer 1: no context at all -> refuse without calling the model
-    if not chunks:
+    if not chunks and not (asks_about_time and active_exam):
         answer = REFUSAL
         _save_conversation(question, answer, chunks, user, session_id,
                            escalate=False, persist=persist)
@@ -270,7 +301,31 @@ def generate_invigilator_answer(question: str, chunks: list[dict], user,
         return
 
     context = "\n\n".join(f"[Source: {c['source']}]\n{c['content']}" for c in chunks)
+
+    # "Time remaining in the exam" is one of the three things the system prompt
+    # says this bot may discuss, but nothing used to put the exam clock in
+    # front of it -- so it either refused or guessed. The figures come from the
+    # exams table via the student's verified id, never from the question text.
+    # active_exam was already looked up above, before the Layer 1 refusal.
+    if active_exam:
+        session_block = (
+            "Current exam session (authoritative -- use these figures verbatim, "
+            "never estimate):\n"
+            f"- Exam: {active_exam['title']} ({active_exam['subject']})\n"
+            f"- Scheduled duration: {active_exam['duration_minutes']} minutes\n"
+            f"- Started at: {active_exam['start_at']}\n"
+            f"- Ends at: {active_exam['end_at']}\n"
+            f"- Time remaining: {active_exam['minutes_remaining']} minutes\n"
+        )
+    else:
+        session_block = (
+            "Current exam session: no active exam window found for this student. "
+            "If they ask how much time is left, say you cannot see an active "
+            "exam session rather than guessing a number.\n"
+        )
+
     prompt = f""" {INVIGILATOR_SYSTEM_PROMPT}
+{session_block}
 Exam rules context:
 {context}
 

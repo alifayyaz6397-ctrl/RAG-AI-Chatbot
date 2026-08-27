@@ -1,18 +1,18 @@
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
+from fastapi import (FastAPI, UploadFile, File, Depends, HTTPException, Query,
+                     BackgroundTasks)
 from google.genai import types
 from pydantic import BaseModel
 from retrieval import retrieve_chunks
-from generation import generate_answer
+from generation import build_answer, stream_text
 from students import get_student_context
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from conversations import store_rating,suggesation_qns
-import shutil
 import os
+import tempfile
 from pdf_parser import extract_text_from_pdf
 from chunking import chunk_text
-from generation import create_conversation_id
-from embedding import embed_text
+from embedding import embed_texts
 from storage import get_connection
 from Auth import router as auth_router, verify_token
 from invigilator import generate_invigilator_answer
@@ -20,17 +20,26 @@ from retrieval import retrieve_exam_chunks
 import instructor
 from analytics import AnalyticsError, Scope, list_owned_exams
 import conversations as conversation_store
+import feedback
 
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    expose_headers=["X-Conversation-Id"],
     allow_origins=[
         "http://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Custom response headers are invisible to browser JS unless they are
+    # explicitly exposed -- without this the frontend cannot read the
+    # escalation flag even though it is being sent.
+    expose_headers=[
+        "X-Escalation-Offered",
+        "X-Confidence",
+        "X-Conversation-Id",
+        "X-Ticket-Id",
+    ],
 )
 
 # Signup / login / /me routes now live in auth.py
@@ -43,28 +52,6 @@ class ChatRequest(BaseModel):
     # registration_number removed -- identity now comes from the
     # verified JWT (user["linked_id"]), never from client input
 
-# def fake_verify_token():
-#     return {
-#         "linked_id": "inst_001",
-#         "role": "instructor",
-#         "tenant_id": "uet",
-#         "username" : "farrukh"
-#     }
-def fake_verify_token():
-    # return {
-    #     "linked_id": "2026-SE-03",
-    #     "role": "student",
-    #     "tenant_id": "uet",
-    #     "username" : "noor",
-    #     "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
-    # }
-    return {
-            "linked_id": "adm_001",
-            "role": "admin",
-            "tenant_id": "uet",
-            "username" : "Samayan",
-            "session_id": "9e1c28be-ba1b-4540-9cf8-da4629aa689a"
-        }
 ADMIN_ROUTER_TOOLS = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -151,31 +138,27 @@ async def chat(request: ChatRequest, user=Depends(verify_token)):
                 )
         # else: fall through to RAG below, same as every other role
 
-    chunks = retrieve_chunks(request.question)
-    conv_id = create_conversation_id()
-    return StreamingResponse(
-        generate_answer(request.question, chunks, user, request.session_id, request.isNewSession, conv_id, student_ctx),
-        media_type="text/plain",
-        headers={"X-Conversation-Id": conv_id},
-    )
-# @app.post("/api/chat")
-# async def chat(request: ChatRequest, user=Depends(verify_token)):
-#     # print(request.isNewSession)
-#     # print("hello")
-#     student_ctx = None
-#     if user["role"] == "student":
-#         # linked_id is the student's internal student_id, taken from the
-#         # verified token -- not something the client can override
-#         student_ctx = get_student_context(user["linked_id"])
+    chunks = retrieve_chunks(request.question, tenant_id=user["tenant_id"])
+    result = build_answer(request.question, chunks, user, student_ctx,
+                          session_id=request.session_id,
+                          is_new_session=request.isNewSession)
 
-#     chunks = retrieve_chunks(request.question)
-#     # print (chunks)      //print retreived chunks
-#     conv_id=create_conversation_id()
-#     return StreamingResponse(
-#         generate_answer(request.question, chunks, user,request.session_id,request.isNewSession ,conv_id,student_ctx),
-#         media_type="text/plain",
-#         headers={"X-Conversation-Id":conv_id},
-#     )
+    # The escalation decision travels in headers, never in the body. The
+    # frontend reads this response as a raw text stream, so anything merged
+    # into the body would render as visible text in the student's chat.
+    headers = {
+        "X-Escalation-Offered": str(result["escalation_offered"]).lower(),
+        "X-Confidence": str(result["top_similarity"]),
+        "X-Conversation-Id": result["conversation_id"],
+    }
+    if result["ticket_id"]:
+        headers["X-Ticket-Id"] = result["ticket_id"]
+
+    return StreamingResponse(
+        stream_text(result["answer"]),
+        media_type="text/plain",
+        headers=headers,
+    )
 
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
@@ -211,64 +194,129 @@ async def list_documents(user=Depends(verify_token)):
             for r in rows
         ]
     }
-@app.post("/api/documents/upload")
+def _ingest_document(document_id: int, filename: str, text: str, tenant_id: str):
+    """Chunk, embed and store one document. Runs in a background task, so
+    nothing here may assume a live request -- it owns its own connection and
+    records its own outcome in documents.ingest_status.
 
-async def upload_document(file: UploadFile = File(...), document_type: str = "general"):
-    # Check file size before doing anything else
+    Embedding is batched (see embedding.embed_texts): a 100-page PDF is a few
+    round trips rather than a few hundred, which is what makes the 5-minute
+    ingestion NFR reachable.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE documents SET ingest_status = 'running' WHERE id = %s",
+                    (document_id,))
+        conn.commit()
+
+        chunks = chunk_text(text)
+        cur.execute("UPDATE documents SET chunk_total = %s WHERE id = %s",
+                    (len(chunks), document_id))
+        conn.commit()
+
+        vectors = embed_texts(chunks)
+        for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+            cur.execute(
+                """
+                INSERT INTO knowledge_chunks
+                    (source_document, chunk_index, content, embedding, document_id, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (filename, i, chunk, vector, document_id, tenant_id)
+            )
+        cur.execute("UPDATE documents SET ingest_status = 'ready', ingest_error = NULL WHERE id = %s",
+                    (document_id,))
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        conn.rollback()
+        cur = conn.cursor()
+        # Partial chunks from a failed run would be retrieved as if they were a
+        # whole document, so the document is emptied before it is marked failed.
+        cur.execute("DELETE FROM knowledge_chunks WHERE document_id = %s", (document_id,))
+        cur.execute(
+            "UPDATE documents SET ingest_status = 'failed', ingest_error = %s WHERE id = %s",
+            (str(exc)[:2000], document_id),
+        )
+        conn.commit()
+        cur.close()
+        print(f"[INGEST FAILED] document {document_id}: {exc}")
+    finally:
+        conn.close()
+
+
+@app.post("/api/documents/upload")
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    document_type: str = "general",
+    user=Depends(verify_token),
+):
+    """Parses and registers the document synchronously, then hands chunking and
+    embedding to a background task. The knowledge base is also the prompt
+    injection surface, so this is admin-only -- it used to have no auth at all.
+    """
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can upload documents")
+
     contents = await file.read()
     if len(contents) > MAX_FILE_SIZE:
-        return {"error": "File too large (max 20MB)"}
-    await file.seek(0)
+        raise HTTPException(status_code=413, detail="File too large (max 20MB)")
 
-    # Save the uploaded file temporarily
+    # os.path.basename strips any directory component: a filename of
+    # "../../main.py" would otherwise be written (and deleted) outside the
+    # working directory. tempfile keeps concurrent uploads of the same
+    # filename from overwriting each other.
+    safe_name = os.path.basename(file.filename or "")
+    lowered = safe_name.lower()
+    if not (lowered.endswith(".pdf") or lowered.endswith(".md")):
+        raise HTTPException(status_code=400, detail="Only .pdf and .md files are supported")
 
-    temp_path = f"temp_{file.filename}"
-    with open(temp_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    if file.filename.lower().endswith(".pdf"):
-        text = extract_text_from_pdf(temp_path)
-    elif file.filename.lower().endswith(".md"):
-        with open(temp_path, "r", encoding="utf-8") as f:
-            text = f.read()
-    else:
+    fd, temp_path = tempfile.mkstemp(suffix=safe_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(contents)
+        if lowered.endswith(".pdf"):
+            text = extract_text_from_pdf(temp_path)
+        else:
+            text = contents.decode("utf-8", errors="replace")
+    finally:
         os.remove(temp_path)
-        return {"error": "Only .pdf and .md files are supported"}
 
-    os.remove(temp_path)
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No extractable text found (a scanned PDF needs OCR before upload)",
+        )
 
     conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO documents (filename, document_type) VALUES (%s, %s) RETURNING id",
-        (file.filename, document_type)
-    )
-    document_id = cur.fetchone()[0]
-    conn.commit()
-
-    chunks = chunk_text(text)
-    for i, chunk in enumerate(chunks):
-        vector = embed_text(chunk)
+    try:
+        cur = conn.cursor()
         cur.execute(
-            """
-            INSERT INTO knowledge_chunks (source_document, chunk_index, content, embedding, document_id)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (file.filename, i, chunk, vector, document_id)
+            """INSERT INTO documents (filename, document_type, tenant_id, ingest_status)
+               VALUES (%s, %s, %s, 'pending') RETURNING id""",
+            (safe_name, document_type, user["tenant_id"])
         )
-    conn.commit()
-    cur.close()
-    conn.close()
+        document_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    background_tasks.add_task(_ingest_document, document_id, safe_name, text,
+                              user["tenant_id"])
 
     return {
         "document_id": document_id,
-        "filename": file.filename,
-        "chunks_created": len(chunks)
+        "filename": safe_name,
+        "ingest_status": "pending",
+        "message": "Upload accepted. Chunking and embedding are running in the background.",
     }
 
 
 @app.get("/api/documents/{document_id}/chunks")
-async def preview_chunks(document_id: int, user=Depends(fake_verify_token)):
+async def preview_chunks(document_id: int, user=Depends(verify_token)):
     if user["role"] != "admin":
         return {"error": "Only admins can view chunk previews"}
 
@@ -296,9 +344,10 @@ async def preview_chunks(document_id: int, user=Depends(fake_verify_token)):
         "chunks": [{"chunk_index": r[0], "content": r[1]} for r in rows]
     }
 @app.get("/api/exam/{exam_id}/info")
-async def exam_info(exam_id: str, user=Depends(fake_verify_token)):
-    if user["role"] != "instructor":
-        return {"error": "Only instructor can view chunk previews"}
+async def exam_info(exam_id: str, user=Depends(verify_token)):
+    if user["role"] not in ("instructor", "admin"):
+        raise HTTPException(status_code=403,
+                            detail="Only instructors and admins can view exam details")
 
     conn = get_connection()
     cur = conn.cursor()
@@ -412,9 +461,14 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
     if user["role"] != "student":
         return {"error": "Exam mode is only available to students"}
 
-    chunks = retrieve_exam_chunks(request.question)
-    answer= generate_invigilator_answer(request.question,request.session_id, chunks,user)
-    return StreamingResponse(answer,media_type="plain/text")
+    chunks = retrieve_exam_chunks(request.question, tenant_id=user["tenant_id"])
+    # Keyword args deliberately: the positional order here was question,
+    # session_id, chunks, user against a signature of question, chunks, user,
+    # session_id, so every argument landed in the wrong parameter.
+    answer = generate_invigilator_answer(
+        request.question, chunks, user, session_id=request.session_id,
+    )
+    return StreamingResponse(answer, media_type="text/plain")
 
 
 @app.get("/api/exam_mode")
@@ -515,7 +569,7 @@ async def list_all_conversations(
 
 
 @app.get("/api/conversations/{session_id}")
-async def get_conversation(session_id,user=Depends(fake_verify_token)):
+async def get_conversation(session_id, user=Depends(verify_token)):
     conversation = conversation_store.get_conversation(user, session_id)
     # "not yours" and "does not exist" deliberately collapse into one 404 so
     # this cannot be used to enumerate other users' conversation ids.
@@ -537,6 +591,49 @@ def chatRating(conv_id: str, rating: getRating, user=Depends(verify_token)):
     return {"status": "ok"}
 
 @app.get("/api/suggestion_qns/{role}")
-def suggestions(role:str,user=Depends(fake_verify_token)):
-    response =suggesation_qns(role)
-    return {"suggestions": response}
+def suggestions(role: str, user=Depends(verify_token)):
+    """`role` stays in the path so the existing frontend call keeps working,
+    but it is ignored -- the suggestion set is chosen by the verified token.
+    Otherwise any student could request the admin prompt set by editing the
+    URL, which leaks what the admin console can be asked to do."""
+    return {"suggestions": suggesation_qns(user["role"])}
+
+# ---------------------------------------------------------
+# Message feedback
+#
+# Restored: these two routes and the `import feedback` above were dropped by
+# the "keep incoming version for conflicted files" merge, which left
+# feedback.py in the tree with nothing importing it. The thumbs-up/down loop
+# and the admin review queue are week-6 deliverables.
+# ---------------------------------------------------------
+
+class FeedbackRequest(BaseModel):
+    message_id: str          # "<conversation_id>:<message_index>", e.g. "conv-140:1"
+    rating: str              # "up" | "down"
+    comment: str | None = None
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: FeedbackRequest, user=Depends(verify_token)):
+    try:
+        return feedback.submit_feedback(
+            user, request.message_id, request.rating, request.comment
+        )
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/admin/feedback")
+async def feedback_review_queue(
+    rating: str = Query("down", description="down | up"),
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(verify_token),
+):
+    """Admin review queue: low-rated answers rolled up by cited chunk and by
+    source document, so a weak KB doc is visible rather than inferred."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view the feedback queue")
+    try:
+        return feedback.review_queue(user, rating=rating, limit=limit)
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

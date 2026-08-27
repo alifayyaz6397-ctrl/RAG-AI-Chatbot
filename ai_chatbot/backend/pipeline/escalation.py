@@ -78,14 +78,23 @@ def retrieval_confidence(chunks: list[dict]) -> dict:
     }
 
 
-def self_check(question: str, answer: str, chunks: list[dict]) -> bool:
+def self_check(question: str, answer: str, chunks: list[dict],
+               student_context: str | None = None) -> bool:
     """True when Gemini judges the answer grounded in the context.
+
+    student_context is the caller's own platform data (results, enrolments,
+    schedule, certificates). It is part of the context the answer is allowed
+    to be grounded in, so it has to be in front of the grader too -- otherwise
+    a correct answer to "what did I score?" reads as unsupported invention.
 
     Fails OPEN (returns True) when the model is unreachable: a transient 503
     should not spam the ticket queue with escalations for answers that were
     probably fine.
     """
     context = "\n\n".join(f"[Source: {c['source']}]\n{c['content']}" for c in chunks)
+    if student_context:
+        context = (f"[Source: this student's own platform record]\n{student_context}"
+                   + ("\n\n" + context if context else ""))
     prompt = SELF_CHECK_PROMPT.format(
         context=context or "(no context retrieved)",
         question=question,
@@ -98,23 +107,37 @@ def self_check(question: str, answer: str, chunks: list[dict]) -> bool:
     return verdict.strip().upper().startswith("SUPPORTED")
 
 
-def assess(question: str, answer: str, chunks: list[dict]) -> dict:
+def assess(question: str, answer: str, chunks: list[dict],
+           student_context: str | None = None) -> dict:
     """Run both signals and decide. Returns everything the caller needs to
     report the decision and explain it."""
     confidence = retrieval_confidence(chunks)
     low_retrieval = confidence["top_similarity"] < SIMILARITY_THRESHOLD
 
-    # Only pay for the self-check when retrieval already looked good --
-    # a low-similarity answer is being escalated regardless.
-    grounded = True
-    if not low_retrieval:
-        grounded = self_check(question, answer, chunks)
-
     reasons = []
-    if low_retrieval:
-        reasons.append("low_retrieval_similarity")
-    if not grounded:
-        reasons.append("answer_not_grounded_in_context")
+
+    if student_context:
+        # "What did I score?" is answered from the student's own record, not
+        # from the knowledge base, so chunk similarity measures nothing about
+        # whether it was answered well -- a correct, fully-grounded answer was
+        # being escalated at 0.648 purely because no KB document happened to
+        # look like the question. When personal data is in play, grounding is
+        # the only signal that means anything, so the self-check always runs
+        # and retrieval similarity is reported but not acted on.
+        grounded = self_check(question, answer, chunks, student_context)
+        if not grounded:
+            reasons.append("answer_not_grounded_in_context")
+    else:
+        # Only pay for the self-check when retrieval already looked good --
+        # a low-similarity answer is being escalated regardless.
+        grounded = True
+        if not low_retrieval:
+            grounded = self_check(question, answer, chunks)
+
+        if low_retrieval:
+            reasons.append("low_retrieval_similarity")
+        if not grounded:
+            reasons.append("answer_not_grounded_in_context")
 
     return {
         "escalation_offered": bool(reasons),
@@ -122,8 +145,9 @@ def assess(question: str, answer: str, chunks: list[dict]) -> dict:
         "top_similarity": confidence["top_similarity"],
         "mean_similarity": confidence["mean_similarity"],
         "threshold": SIMILARITY_THRESHOLD,
-        "self_check_ran": not low_retrieval,
+        "self_check_ran": bool(student_context) or not low_retrieval,
         "self_check_grounded": grounded,
+        "grounded_on_personal_data": bool(student_context),
     }
 
 

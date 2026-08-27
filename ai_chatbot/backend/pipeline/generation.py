@@ -72,7 +72,7 @@ Answer:
     response = client.models.generate_content_stream(model=MODEL, contents=prompt)
     draft = "".join(chunk.text for chunk in response if chunk.text)
 
-    verdict = escalation.assess(question, draft, chunks)
+    verdict = escalation.assess(question, draft, chunks, student_context)
     answer = draft + escalation.ESCALATION_NOTE if verdict["escalation_offered"] else draft
 
     conversation_id, ticket_id = None, None
