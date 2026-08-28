@@ -1,22 +1,9 @@
-# Python
 venv/
-.venv/
+.env
 __pycache__/
 *.pyc
-.env
-
-# Node
-node_modules/
-dist/
-*.local
-npm-debug.log*
-yarn-error.log*
-
-# Editors / OS
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
-
-# Data
+node_modules/
+dist/
 *.pdf
