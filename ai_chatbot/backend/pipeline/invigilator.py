@@ -1,12 +1,14 @@
 import os
 import json
+import re
 from dotenv import load_dotenv
 from google import genai
 from storage import get_connection
-from generation import create_conversation_id
+from students import get_active_exam
+import llm
 
 load_dotenv()
-conv_id=create_conversation_id();
+
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 INVIGILATOR_SYSTEM_PROMPT = """You are the Virtual Invigilator for an active exam session.
@@ -171,37 +173,70 @@ Respond with exactly one word: TECHNICAL, MEDICAL, ACCOMMODATION, or OTHER.
 """
 
 
+# Matches only questions about the exam clock. Kept deliberately narrow: it
+# gates nothing on its own, it just stops a timing question from being refused
+# for lack of a matching rules document. See generate_invigilator_answer().
+_TIME_QUESTION_RE = re.compile(
+    r"\b("
+    r"time\s+(left|remaining)"
+    r"|how\s+(much\s+time|long|many\s+minutes)"
+    r"|minutes\s+(left|remaining)"
+    r"|when\s+does\s+(it|the\s+exam|this)\s+(end|finish)"
+    r"|how\s+long\s+(do|have)\s+i"
+    r"|deadline"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def guard_check(question: str, answer: str) -> bool:
-    """Returns True if the answer is safe to show the student."""
+    """Returns True if the answer is safe to show the student.
+
+    Fails CLOSED. If Gemini cannot be reached the answer has not been cleared,
+    and an uncleared answer during a live exam is refused rather than shown --
+    the whole point of the guard is that nothing reaches the student unverified.
+    """
     prompt = GUARD_PROMPT.format(question=question, answer=answer)
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt
-    )
-    verdict = response.text.strip().upper()
+    try:
+        verdict = llm.generate(prompt).strip().upper()
+    except llm.ModelUnavailable:
+        print("[GUARD: UNAVAILABLE] failing closed")
+        return False
     return verdict.startswith("SAFE")
 
 
 def classify_message(question: str) -> str:
     """Routes the student's message using the 4-way ROUTING_PROMPT.
-    Returns 'TECHNICAL', 'MEDICAL', 'ACCOMMODATION', or 'OTHER'."""
+    Returns 'TECHNICAL', 'MEDICAL', 'ACCOMMODATION', or 'OTHER'.
+
+    Falls back to OTHER when the model is unreachable: OTHER is the branch
+    that goes on to retrieval plus the guard, so an unroutable message still
+    ends up somewhere safe instead of failing the request.
+    """
     prompt = ROUTING_PROMPT.format(question=question)
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt
-    )
-    verdict = response.text.strip().upper()
+    try:
+        verdict = llm.generate(prompt).strip().upper()
+    except llm.ModelUnavailable:
+        return "OTHER"
     for category in ("TECHNICAL", "MEDICAL", "ACCOMMODATION"):
         if verdict.startswith(category):
             return category
     return "OTHER"
 
 
-def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dict], user):
-    """Yields (type, value) tuples: ('text', str) is visible answer content;
-    ('event', dict) is metadata your route should send as a SEPARATE event,
-    never concatenated into the displayed message -- that's what caused the
-    __EVENT__{...} string to leak into the student-visible answer before."""
+def generate_invigilator_answer(question: str, chunks: list[dict], user,
+                                session_id: str | None = None,
+                                persist: bool = True):
+    """persist=False runs the identical guard path but writes no conversation
+    or escalation rows -- the red-team evaluation harness uses it so a
+    benchmark run does not fill the escalation queue with synthetic incidents.
+
+    session_id groups the turns of one exam chat together for the history
+    view; it is optional so the harness can call this without one.
+
+    Yields the visible answer text. Escalation metadata is never concatenated
+    into what is yielded -- that's what caused the __EVENT__{...} string to
+    leak into the student-visible answer before."""
     REFUSAL = "I can only help with exam rules and technical issues during this exam. Please continue with your exam."
 
     category = classify_message(question)
@@ -212,8 +247,9 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
         answer = ("This may need immediate attention. Please talk to your "
                    "invigilator directly and in person right now -- don't "
                    "wait for a response here.")
-        _record_escalation(question, user, reason="medical")
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
+        _record_escalation(question, user, reason="medical", persist=persist)
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -221,11 +257,12 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
     # into the generic technical queue even when the symptom sounds
     # technical ("isn't showing on screen"). DB record only, no webhook.
     if category == "ACCOMMODATION":
-        _record_escalation(question, user, reason="accommodation")
+        _record_escalation(question, user, reason="accommodation", persist=persist)
         answer = ("I've logged this for your exam supervisor to review. "
                    "Soon he will contact you. "
                    "Continue your exam.")
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
@@ -233,23 +270,62 @@ def generate_invigilator_answer(question: str, session_id: str ,chunks: list[dic
     # only claims what actually happened: it was logged for review, not
     # that a person has already been notified live.
     if category == "TECHNICAL":
-        _record_escalation(question, user, reason="technical_issue")
-        answer = ("I've logged this issue for your exam supervisor to "
+        _record_escalation(question, user, reason="technical_issue", persist=persist)
+        answer = ("I've logged this issue for your exam supervisor to review. "
                     "Soon he will contact you. "
                     "Continue your exam.")
-        _save_conversation(question, answer, chunks, user,session_id, escalate=True)
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=True, persist=persist)
         yield (answer)
         return
 
+    # Time questions are answered from the exams table, not from a rules
+    # document, so "no chunks retrieved" is the wrong reason to refuse them --
+    # "How much time do I have left?" retrieves nothing at any sane cut-off and
+    # was refused deterministically even with a live exam window in hand.
+    #
+    # Deliberately a tight literal pattern rather than another model call: it
+    # is auditable, costs nothing, and cannot be talked into matching. It only
+    # relaxes Layer 1, and only while an exam is actually active -- the draft
+    # still goes through guard_check() exactly as before, so an academic
+    # question that happens to contain "how long" is still caught there.
+    asks_about_time = bool(_TIME_QUESTION_RE.search(question))
+    active_exam = get_active_exam(user["linked_id"])
+
     # Layer 1: no context at all -> refuse without calling the model
-    if not chunks:
+    if not chunks and not (asks_about_time and active_exam):
         answer = REFUSAL
-        _save_conversation(question, answer, chunks, user,session_id, escalate=False)
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=False, persist=persist)
         yield (answer)
         return
 
     context = "\n\n".join(f"[Source: {c['source']}]\n{c['content']}" for c in chunks)
+
+    # "Time remaining in the exam" is one of the three things the system prompt
+    # says this bot may discuss, but nothing used to put the exam clock in
+    # front of it -- so it either refused or guessed. The figures come from the
+    # exams table via the student's verified id, never from the question text.
+    # active_exam was already looked up above, before the Layer 1 refusal.
+    if active_exam:
+        session_block = (
+            "Current exam session (authoritative -- use these figures verbatim, "
+            "never estimate):\n"
+            f"- Exam: {active_exam['title']} ({active_exam['subject']})\n"
+            f"- Scheduled duration: {active_exam['duration_minutes']} minutes\n"
+            f"- Started at: {active_exam['start_at']}\n"
+            f"- Ends at: {active_exam['end_at']}\n"
+            f"- Time remaining: {active_exam['minutes_remaining']} minutes\n"
+        )
+    else:
+        session_block = (
+            "Current exam session: no active exam window found for this student. "
+            "If they ask how much time is left, say you cannot see an active "
+            "exam session rather than guessing a number.\n"
+        )
+
     prompt = f""" {INVIGILATOR_SYSTEM_PROMPT}
+{session_block}
 Exam rules context:
 {context}
 
@@ -259,14 +335,17 @@ Student question:
 Answer:
 """
 
-    response = client.models.generate_content_stream(model="gemini-3.5-flash", contents=prompt)
-
-    draft_chunks = []
-    for chunk in response:
-        if chunk.text:
-            draft_chunks.append(chunk.text)
-
-    draft_answer = "".join(draft_chunks)
+    # Not streamed: the draft is buffered anyway so the guard can inspect the
+    # finished answer before any of it reaches the student. Going through
+    # llm.generate() adds the retry the streaming call never had.
+    try:
+        draft_answer = llm.generate(prompt)
+    except llm.ModelUnavailable:
+        answer = REFUSAL
+        _save_conversation(question, answer, chunks, user, session_id,
+                           escalate=False, persist=persist)
+        yield (answer)
+        return
 
     # Single guard check on the complete answer -- one API call instead of
     # several, and nothing reaches the client until it's cleared.
@@ -282,11 +361,14 @@ Answer:
         for i in range(0, len(answer), 20):
             yield (answer[i:i + 20])
 
-    _save_conversation(question, answer, chunks, user,session_id, escalate=content_unsafe)
+    _save_conversation(question, answer, chunks, user, session_id,
+                       escalate=content_unsafe, persist=persist)
 
 
-
-def _save_conversation(question, answer, chunks, user,session_id, escalate):
+def _save_conversation(question, answer, chunks, user, session_id, escalate,
+                       persist: bool = True):
+    if not persist:
+        return
     messages = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "retrieved_chunk_id": [c["id"] for c in chunks if "id" in c]}
@@ -296,9 +378,10 @@ def _save_conversation(question, answer, chunks, user,session_id, escalate):
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode, escalated,session_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s,%s)""",
-            (conv_id,user["linked_id"], user["role"], json.dumps(messages), user["tenant_id"], "exam", escalate,session_id)
+            """INSERT INTO conversations (user_id, role, messages, tenant_id, mode, escalated, session_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (user["linked_id"], user["role"], json.dumps(messages),
+             user["tenant_id"], "exam", escalate, session_id)
         )
         conn.commit()
         cur.close()
@@ -306,12 +389,14 @@ def _save_conversation(question, answer, chunks, user,session_id, escalate):
         conn.close()
 
 
-def _record_escalation(question, user, reason: str):
+def _record_escalation(question, user, reason: str, persist: bool = True):
     """Writes a real, queryable escalation row -- DB insert only, no
     webhook/notification call. Runs before the student is told anything,
     so any confirmation message is backed by an actual record. `reason`
     distinguishes technical_issue / medical / accommodation in the
     dashboard so they don't blur into one undifferentiated queue."""
+    if not persist:
+        return None
     conn = get_connection()
     try:
         cur = conn.cursor()

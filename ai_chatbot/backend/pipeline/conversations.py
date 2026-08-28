@@ -143,7 +143,6 @@ def list_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
                 LIMIT %(limit)s OFFSET %(offset)s""",
             params,
         )
-        {where}
         rows = cur.fetchall()
      
         cur.close()
@@ -196,11 +195,22 @@ def get_conversation(user, session_id: str) -> dict | None:
 
     Admins may read any conversation inside their own tenant.
     """
+    # The WHERE clause used to be `session_id = %s` and nothing else, so any
+    # caller holding (or guessing) a session id could read another student's
+    # chat -- the docstring above described a check the SQL did not perform.
+    # A non-admin is now fenced to their own rows; an admin to their tenant.
+    params = {
+        "session_id": session_id,
+        "tenant_id": user["tenant_id"],
+        # NULL disables the owner test, which is how an admin reads any user's
+        # conversation while staying inside their own tenant.
+        "user_id": None if user["role"] == "admin" else user["linked_id"],
+    }
+
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            
     """SELECT c.id,c.created_at,
               CASE WHEN jsonb_typeof(c.messages) = 'array'
                    THEN (SELECT m ->> 'content'
@@ -215,29 +225,31 @@ def get_conversation(user, session_id: str) -> dict | None:
                          LIMIT 1)
               END AS answer_preview
        FROM conversations c
-       WHERE c.session_id = %s
+       WHERE c.session_id = %(session_id)s
+         AND c.tenant_id = %(tenant_id)s
+         AND (%(user_id)s::text IS NULL OR c.user_id = %(user_id)s)
        ORDER BY c.created_at ASC""",
-    (session_id,),
+    params,
 )
         rows = cur.fetchall()
         cur.close()
     finally:
         conn.close()
 
-    if rows is None:
-        return [];
-    session=[]
-    for row in rows:
-        session.append({
-            "id":row[0],
-            "created_at":row[1],
-            "question":row[2],
-            "answer":row[3]
-            
-        })
-        # s["conversations"].sort(key=lambda c: c["created_at"],reverse=True)
-    
-    return list(session)
+    # No rows means "does not exist" and "not yours" alike -- the route turns
+    # both into the same 404 so this cannot enumerate other users' sessions.
+    if not rows:
+        return None
+
+    return [
+        {
+            "id": row[0],
+            "created_at": row[1],
+            "question": row[2],
+            "answer": row[3],
+        }
+        for row in rows
+    ]
 
 
 def list_all_conversations(user, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
@@ -305,7 +317,7 @@ def store_rating(rating, conv_id):
         )
         conn.commit()
         cur.close()
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
     finally:

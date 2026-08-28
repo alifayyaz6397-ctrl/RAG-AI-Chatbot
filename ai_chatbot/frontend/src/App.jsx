@@ -53,15 +53,18 @@ function App() {
   const [analyticMode, setAnalyticMode] = useState(false);
   const [fetchExams, setFetchExams] = useState([]);
   const [myConvo, setMyConvo] = useState([]);
+  const [, setSessionChat] = useState([]);
   const [sessionId, setSessionId] = useState(null);
-  const [sessionChat, setSessionChat] = useState([]);
   const [isNewSession, setIsNewSession] = useState(false);
   const [searchChat, setSearchChat] = useState([]);
   const [roleFilter, setRoleFilter] = useState("");
   const [modeFilter, setModeFilter] = useState("");
   const [escalatedFilter, setEscalatedFilter] = useState(null);
   const [userIdFilter, setUserIdFilter] = useState(null);
-  const [adminPanelView, setAdminPanelView] = useState(null); // null | "chats" | "documents" — drives which center modal is open
+  const [adminPanelView, setAdminPanelView] = useState(null); // null | "chats" | "documents" | "feedback" — drives which center modal is open
+  const [feedbackQueue, setFeedbackQueue] = useState(null);
+  const [feedbackRating, setFeedbackRating] = useState("down");
+  const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
   const [examListOpen, setExamListOpen] = useState(false);
   const [examDetailOpen, setExamDetailOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState(null);
@@ -124,11 +127,14 @@ function App() {
   // Fetch latest client chats whenever the admin opens the Client Chats modal
   // (adminSearchChat() reads current filter state, so empty filters -> latest chats).
   useEffect(() => {
+    if (role === "admin" && adminPanelView === "feedback") {
+      fetchFeedbackQueue(feedbackRating);
+    }
     if (role === "admin" && adminPanelView === "chats") {
       adminSearchChat();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, adminPanelView]);
+  }, [role, adminPanelView, feedbackRating]);
 
   // Fetch the sample/suggestion questions for the current role + mode combo,
   // so they're ready the moment an empty chat (New Chat / login) is shown.
@@ -213,8 +219,8 @@ function App() {
       const data = await res.json();
       // alert("Response: " + JSON.stringify(data));
       setFetchExams(data.exams || []);
-    } catch (err) {
-      // alert("Error: " + err.message);
+    } catch {
+      // intentionally silent: the aborted-stream case is not user-facing
     }
   }
 
@@ -316,6 +322,26 @@ function App() {
     });
   }
 
+  // Admin review queue: which answers were thumbed down, rolled up to the
+  // knowledge-base chunk and document they cited. A document high in
+  // weak_documents is the one to go and rewrite.
+  async function fetchFeedbackQueue(rating) {
+    setIsLoadingFeedback(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/admin/feedback?rating=${rating}&limit=50`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error(`feedback queue failed: ${res.status}`);
+      setFeedbackQueue(await res.json());
+    } catch (err) {
+      console.error("Failed to load feedback queue", err);
+      setFeedbackQueue(null);
+    } finally {
+      setIsLoadingFeedback(false);
+    }
+  }
+
   async function rateMessage(index, convId, rating) {
     if (!convId) return;
 
@@ -330,17 +356,28 @@ function App() {
     });
 
     try {
-      // TODO: swap in your real rating endpoint (path/method/body) once it exists.
-      await fetch(`${API_BASE}/api/conversations/${convId}/rate`, {
+      // Per-message feedback, which is what the admin review queue reads --
+      // /api/conversations/{id}/rate only stores one rating for the whole
+      // conversation and nothing consumes it. A conversation row holds exactly
+      // [user, assistant], so the assistant turn is always index 1.
+      const res = await fetch(`${API_BASE}/api/feedback`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ rating }),
+        body: JSON.stringify({ message_id: `${convId}:1`, rating }),
       });
+      if (!res.ok) throw new Error(`feedback failed: ${res.status}`);
     } catch (err) {
       console.error("Failed to submit rating", err);
+      // Roll the optimistic update back so the thumb doesn't claim a vote
+      // that was never recorded.
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[index] = { ...updated[index], rating: null };
+        return updated;
+      });
     }
   }
 
@@ -489,12 +526,21 @@ function App() {
       // (sent alongside the streamed body, doesn't touch the stream itself)
       // and attach it to this assistant message before any chunks arrive.
       const convId = response.headers.get("X-Conversation-Id");
-      if (convId) {
+      // The backend decides escalation from retrieval confidence plus a
+      // grounding self-check and reports it in headers, because the body is
+      // consumed as a raw stream and anything merged into it would render as
+      // visible text. Nothing was reading these until now.
+      const escalationOffered =
+        response.headers.get("X-Escalation-Offered") === "true";
+      const ticketId = response.headers.get("X-Ticket-Id");
+      if (convId || escalationOffered) {
         setMessages((prev) => {
           const updated = [...prev];
           updated[updated.length - 1] = {
             ...updated[updated.length - 1],
             convId,
+            escalationOffered,
+            ticketId,
           };
           return updated;
         });
@@ -658,6 +704,13 @@ function App() {
                 >
                   <Users size={16} />
                   Client Chats
+                </button>
+                <button
+                  className="sidebar-nav-item"
+                  onClick={() => setAdminPanelView("feedback")}
+                >
+                  <ThumbsDown size={16} />
+                  Feedback Review
                 </button>
               </div>
             </div>
@@ -876,6 +929,17 @@ function App() {
                           </>
                         )}
                       </div>
+
+                      {msg.role === "assistant" && msg.escalationOffered && (
+                        <div className="escalation-notice">
+                          <AlertTriangle size={15} />
+                          <span>
+                            This answer may be incomplete, so it has been
+                            flagged for a human supervisor
+                            {msg.ticketId ? ` (ticket ${msg.ticketId})` : ""}.
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1152,6 +1216,104 @@ function App() {
                     >
                       <Trash2 size={14} />
                     </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Feedback Review modal (admin only) ---------- */}
+
+      {adminPanelView === "feedback" && (
+        <div className="preview-overlay" onClick={() => setAdminPanelView(null)}>
+          <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-header">
+              <h2>Feedback Review</h2>
+              <button
+                onClick={() => setAdminPanelView(null)}
+                className="auth-close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="feedback-toolbar">
+              <button
+                className={feedbackRating === "down" ? "active" : ""}
+                onClick={() => setFeedbackRating("down")}
+              >
+                <ThumbsDown size={14} /> Thumbed down
+              </button>
+              <button
+                className={feedbackRating === "up" ? "active" : ""}
+                onClick={() => setFeedbackRating("up")}
+              >
+                <ThumbsUp size={14} /> Thumbed up
+              </button>
+              {feedbackQueue && (
+                <span className="feedback-totals">
+                  {feedbackQueue.totals.up} up · {feedbackQueue.totals.down} down
+                </span>
+              )}
+            </div>
+
+            {isLoadingFeedback ? (
+              <div className="docs-empty">Loading…</div>
+            ) : !feedbackQueue ? (
+              <div className="docs-empty">Could not load the feedback queue.</div>
+            ) : feedbackQueue.items.length === 0 ? (
+              <div className="docs-empty">
+                No {feedbackRating === "down" ? "negative" : "positive"} ratings yet.
+              </div>
+            ) : (
+              <div className="feedback-body">
+                {feedbackQueue.weak_documents.length > 0 && (
+                  <>
+                    <div className="feedback-section-title">
+                      Documents to improve
+                    </div>
+                    <div className="doc-list">
+                      {feedbackQueue.weak_documents.map((d) => (
+                        <div key={d.document_id ?? "none"} className="doc-sidebar-row">
+                          <div className="doc-sidebar-icon">
+                            <FileText size={15} />
+                          </div>
+                          <div className="doc-sidebar-info">
+                            <span className="doc-sidebar-name">
+                              {d.filename ?? "(no source document)"}
+                            </span>
+                            <span className="doc-sidebar-meta">
+                              {d.negative_count} rating
+                              {d.negative_count === 1 ? "" : "s"} ·{" "}
+                              {d.chunks_implicated} chunk
+                              {d.chunks_implicated === 1 ? "" : "s"} implicated
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <div className="feedback-section-title">Rated answers</div>
+                {feedbackQueue.items.map((item) => (
+                  <div key={item.feedback_id} className="feedback-item">
+                    <div className="feedback-item-meta">
+                      <span className="feedback-mode">{item.mode}</span>
+                      <span>{item.user_id}</span>
+                      <span>
+                        {item.created_at
+                          ? new Date(item.created_at).toLocaleString()
+                          : ""}
+                      </span>
+                    </div>
+                    <div className="feedback-q">{item.question}</div>
+                    <div className="feedback-a">{item.answer_preview}</div>
+                    {item.comment && (
+                      <div className="feedback-comment">“{item.comment}”</div>
+                    )}
                   </div>
                 ))}
               </div>
