@@ -3,7 +3,7 @@ import { Upload, Trash2, Eye, X, Loader2 } from "lucide-react";
 import { useAuth } from "./AuthContext";
 import "./AdminPanel.css";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_URL;
 
 function AdminPanel() {
   const { token, logout } = useAuth();

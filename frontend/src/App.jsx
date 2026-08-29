@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_URL;
 
 function App() {
   // alert(localStorage.getItem("token"))
