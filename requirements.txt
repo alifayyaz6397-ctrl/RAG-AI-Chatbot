@@ -10,6 +10,7 @@ colorama==0.4.6
 cryptography==49.0.0
 distro==1.9.0
 fastapi==0.139.0
+sqlglot
 google-auth==2.56.0
 google-genai==2.11.0
 h11==0.16.0
