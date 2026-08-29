@@ -1,13 +1,13 @@
 import os
 from dotenv import load_dotenv
 from google import genai
-import psycopg2
+import psycopg
 
 load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def get_connection():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    return psycopg.connect(os.environ["DATABASE_URL"])
 
 def embed_query(question: str) -> list[float]:
     result = client.models.embed_content(

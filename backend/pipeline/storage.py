@@ -1,11 +1,11 @@
 import os
 from dotenv import load_dotenv
-import psycopg2
+import psycopg
 
 load_dotenv()
 
 def get_connection():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    return psycopg.connect(os.environ["DATABASE_URL"])
 
 def store_chunk(source_document: str, chunk_index: int, content: str, embedding: list[float]):
     """Insert one chunk + its embedding into knowledge_chunks."""
