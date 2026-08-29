@@ -27,6 +27,7 @@ app.add_middleware(
     expose_headers=["X-Conversation-Id"],
     allow_origins=[
         "http://localhost:5173",
+        "https://rag-ai-chatbot-knpwrno7h-alpha-af4c.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
