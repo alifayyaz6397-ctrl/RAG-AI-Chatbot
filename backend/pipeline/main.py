@@ -416,7 +416,7 @@ async def exam_chat(request: ExamChatRequest,user=Depends(verify_token)):
 
     chunks = retrieve_exam_chunks(request.question)
     answer= generate_invigilator_answer(request.question,request.session_id, chunks,user)
-    return StreamingResponse(answer,media_type="plain/text")
+    return StreamingResponse(answer,media_type="text/plain")
 
 
 @app.get("/api/exam_mode")
@@ -517,7 +517,7 @@ async def list_all_conversations(
 
 
 @app.get("/api/conversations/{session_id}")
-async def get_conversation(session_id,user=Depends(fake_verify_token)):
+async def get_conversation(session_id,user=Depends(verify_token)):
     conversation = conversation_store.get_conversation(user, session_id)
     # "not yours" and "does not exist" deliberately collapse into one 404 so
     # this cannot be used to enumerate other users' conversation ids.
@@ -539,6 +539,6 @@ def chatRating(conv_id: str, rating: getRating, user=Depends(verify_token)):
     return {"status": "ok"}
 
 @app.get("/api/suggestion_qns/{role}")
-def suggestions(role:str,user=Depends(fake_verify_token)):
+def suggestions(role:str,user=Depends(verify_token)):
     response =suggesation_qns(role)
     return {"suggestions": response}

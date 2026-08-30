@@ -6,7 +6,6 @@ from storage import get_connection
 from generation import create_conversation_id
 
 load_dotenv()
-conv_id=create_conversation_id();
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 INVIGILATOR_SYSTEM_PROMPT = """You are the Virtual Invigilator for an active exam session.
@@ -294,6 +293,7 @@ def _save_conversation(question, answer, chunks, user,session_id, escalate):
 
     conn = get_connection()
     try:
+        conv_id=create_conversation_id();
         cur = conn.cursor()
         cur.execute(
             """INSERT INTO conversations (id,user_id, role, messages, tenant_id, mode, escalated,session_id)
