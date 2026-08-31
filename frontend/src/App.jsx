@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Bot,
+  Menu,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
@@ -38,6 +39,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const chatWrapperRef = useRef(null);
   const textareaRef = useRef(null);
@@ -610,9 +612,18 @@ function App() {
 
   return (
     <div className="app">
+      {/* ---------- Mobile sidebar backdrop (tap to close) ---------- */}
+
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* ---------- Sidebar ---------- */}
 
-      <div className="sidebar">
+      <div className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-logo">
           <svg
             className="bot-icon"
@@ -745,6 +756,13 @@ function App() {
 
       <div className="main">
         <div className="main-header">
+          <button
+            className="sidebar-toggle-btn"
+            onClick={() => setSidebarOpen(true)}
+            title="Open menu"
+          >
+            <Menu size={20} />
+          </button>
           <div className="chat-title-label">{currentChatTitle}</div>
           <h1></h1>
           {examMode && (

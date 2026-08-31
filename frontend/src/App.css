@@ -1623,3 +1623,88 @@ h1 {
     border-color: #3f3f3f;
     color: #ECECEC;
 }
+
+/* ============================================================
+   Mobile responsiveness — sidebar drawer, backdrop, scaling
+   ============================================================ */
+
+.sidebar-toggle-btn {
+    display: none;
+    position: absolute;
+    left: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: #ECECEC;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 8px;
+    z-index: 10;
+}
+
+.sidebar-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 250;
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        z-index: 300;
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+        box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+    }
+
+    .main {
+        width: 100%;
+    }
+
+    .sidebar-toggle-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .sidebar-backdrop {
+        display: block;
+    }
+
+    .chat-title-label {
+        left: 60px;
+        max-width: 150px;
+    }
+
+    .main-header h1 {
+        font-size: 28px;
+    }
+
+    .empty-hero-greeting {
+        font-size: 22px;
+    }
+}
+
+@media (max-width: 480px) {
+    .message-row {
+        max-width: 90%;
+    }
+
+    .preview-modal {
+        padding: 16px;
+        border-radius: 14px;
+    }
+}
